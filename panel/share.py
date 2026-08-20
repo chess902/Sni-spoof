@@ -5,9 +5,7 @@ local sni-spoof listener while leaving every crypto/transport field alone."""
 
 import base64
 import json
-from urllib.parse import (
-    parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit,
-)
+from urllib.parse import parse_qsl, quote, unquote, urlsplit, urlunsplit
 
 SUPPORTED = ("vless", "trojan", "vmess")
 

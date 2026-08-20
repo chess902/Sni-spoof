@@ -9,7 +9,7 @@ import struct
 import subprocess
 import time
 
-from . import db, paths, settings
+from . import db, settings
 
 _cpu_prev = {"total": 0, "idle": 0}
 _net_prev = {"ts": 0.0, "rx": 0, "tx": 0}

@@ -197,7 +197,16 @@ cmd_install() {
   panel_cli core install || warn "نصب هسته ناموفق بود؛ بعداً از منو تلاش کنید" \
                                  "Core install failed; retry later from the menu"
 
-  systemctl enable --now "$PANEL_SERVICE" >/dev/null 2>&1 || true
+  if [[ -d /run/systemd/system ]]; then
+    # Enable the core too, so listeners come back after a reboot.
+    systemctl enable "$CORE_SERVICE" >/dev/null 2>&1 || true
+    systemctl enable --now "$PANEL_SERVICE" >/dev/null 2>&1 || true
+  else
+    warn "systemd در دسترس نیست؛ پنل خودش هسته را مدیریت می‌کند" \
+         "systemd is unavailable; the panel will supervise the core itself"
+    say "پنل را دستی اجرا کنید: PYTHONPATH=$INSTALL_DIR python3 -m panel serve" \
+        "Start the panel manually: PYTHONPATH=$INSTALL_DIR python3 -m panel serve"
+  fi
   open_firewall "$port"
 
   hr

@@ -6,12 +6,9 @@ import mimetypes
 import os
 import re
 import ssl
-import threading
-import time
 import traceback
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs, unquote, urlparse
 
 from . import auth, db, i18n, paths, settings
