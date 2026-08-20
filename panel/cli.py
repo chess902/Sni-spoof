@@ -654,6 +654,17 @@ def cmd_link(args):
 
 def cmd_scan(args):
     _bootstrap()
+    if args.from_listener:
+        listeners = core.list_listeners(enabled_only=True)
+        if args.id:
+            listeners = [l for l in listeners if l["id"] == args.id]
+        if not listeners:
+            print("no enabled listener to take the target from", file=sys.stderr)
+            return 1
+        target = listeners[0]
+        args.target = "%s:%d" % (target["connect_ip"], target["connect_port"])
+        print("scanning against listener #%d upstream %s"
+              % (target["id"], args.target), file=sys.stderr)
     snis = None
     if args.list:
         with open(args.list, "r", encoding="utf-8") as handle:
@@ -909,6 +920,9 @@ def build_parser():
     scan.add_argument("--list")
     scan.add_argument("--output", "-o")
     scan.add_argument("--apply", action="store_true", help="apply the fastest hit")
+    scan.add_argument("--from-listener", action="store_true",
+                      help="probe against a listener's own upstream instead of the default target")
+    scan.add_argument("--id", type=int, help="which listener to take the target from")
     scan.set_defaults(func=cmd_scan)
 
     core_cmd = sub.add_parser("core", help="manage the sni-spoof-rs binary")

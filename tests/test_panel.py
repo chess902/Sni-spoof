@@ -231,6 +231,16 @@ class XrayOutboundTests(unittest.TestCase):
         self.assertEqual(download["xhttpSettings"]["path"], "/dl")
         self.assertEqual(download["tlsSettings"]["serverName"], "cf.example.com")
 
+    def test_host_header_falls_back_to_sni(self):
+        """A link without host= must still send a usable Host header; leaving it
+        empty makes Xray fall back to the dial address (127.0.0.1), which any
+        Cloudflare edge rejects."""
+        from panel import xray
+        link = ("vless://uuid@cf.example.com:443?security=tls&sni=cf.example.com"
+                "&type=ws&path=%2Fx#n")
+        stream = xray.build_config(link, "127.0.0.1", 40443)["outbounds"][0]["streamSettings"]
+        self.assertEqual(stream["wsSettings"]["headers"]["Host"], "cf.example.com")
+
     def test_no_extra_means_no_download_settings(self):
         from panel import xray
         link = "vless://uuid@cf.example.com:443?security=tls&sni=cf.example.com&type=ws#n"
