@@ -5,7 +5,7 @@ import os
 import shutil
 import subprocess
 
-from . import paths
+from . import paths, procs
 
 MANAGED = {
     "core": paths.CORE_SERVICE,
@@ -38,6 +38,8 @@ def unit_for(alias):
 
 
 def status(alias):
+    if not has_systemd() and alias != "panel":
+        return procs.status(alias)
     unit = unit_for(alias)
     info = {
         "unit": unit,
@@ -53,6 +55,7 @@ def status(alias):
     }
     if not has_systemd():
         info["state"] = "no-systemd"
+        info["backend"] = "none"
         return info
 
     code, out, _ = _run(
@@ -102,9 +105,11 @@ def status_all():
 def action(alias, verb):
     if verb not in ("start", "stop", "restart", "reload", "enable", "disable"):
         raise ValueError("unsupported verb: %s" % verb)
-    unit = unit_for(alias)
     if not has_systemd():
-        return False, "systemd is not available on this host"
+        if alias == "panel":
+            return False, "the panel supervises itself here; restart it manually"
+        return procs.action(alias, verb)
+    unit = unit_for(alias)
     args = ["systemctl", verb, unit]
     if verb == "enable":
         args = ["systemctl", "enable", "--now", unit]
@@ -120,6 +125,8 @@ def daemon_reload():
 
 
 def logs(alias, lines=200, since=None):
+    if not has_systemd():
+        return procs.logs(alias, lines)
     unit = unit_for(alias)
     if shutil.which("journalctl") is None:
         return "journalctl is not available on this host"

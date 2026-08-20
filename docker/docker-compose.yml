@@ -1,0 +1,28 @@
+services:
+  sni-spoof:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: sni-spoof
+    restart: unless-stopped
+    # Raw packet access is what the ClientHello injection needs.
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    network_mode: host
+    environment:
+      PANEL_PORT: "2095"
+      PANEL_USER: "admin"
+      # PANEL_PASSWORD: "change-me"
+      PANEL_LANGUAGE: "fa"
+      # SHARE_LINK: "vless://uuid@cf.example.com:443?..."
+      # FAKE_SNI: "security.vercel.com"
+      # LISTEN_PORT: "40443"
+      # XRAY_ENABLED: "1"
+    volumes:
+      - sni-spoof-etc:/etc/sni-spoof
+      - sni-spoof-data:/var/lib/sni-spoof
+
+volumes:
+  sni-spoof-etc:
+  sni-spoof-data:

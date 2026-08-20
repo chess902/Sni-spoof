@@ -257,9 +257,6 @@ def apply(restart=True):
     listeners the core cannot start at all, so it is stopped instead."""
     _, count = write_config()
     result = {"listeners": count, "restarted": False, "stopped": False, "message": ""}
-    if not services.has_systemd():
-        result["message"] = "config written (systemd unavailable, service untouched)"
-        return result
     if count == 0:
         ok, message = services.action("core", "stop")
         result["stopped"] = True
