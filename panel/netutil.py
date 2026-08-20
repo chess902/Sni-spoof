@@ -112,6 +112,27 @@ def port_free(host, port):
             return False
 
 
+def is_local_address(ip):
+    """True when `ip` is assigned to an interface on this machine.
+
+    Pointing a listener's upstream at one of our own addresses is fatal: the
+    kernel routes that traffic internally instead of over a NIC, so the raw
+    sniffer never sees the handshake and every connection dies with
+    "timeout waiting for fake ACK". Binding is the cheapest reliable test —
+    it only succeeds for locally configured addresses."""
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    family = socket.AF_INET6 if ":" in ip else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind((ip, 0))
+            return True
+        except OSError:
+            return False
+
+
 def local_ip_for(dst="1.1.1.1"):
     """The source IP the kernel would use to reach `dst` (no packets sent)."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:

@@ -5,6 +5,7 @@ in the panel instead of crash-looping the service."""
 import ipaddress
 import json
 import os
+import threading
 import time
 
 from . import db, download, netutil, paths, services, settings
@@ -27,6 +28,35 @@ DEFAULT_FAKE_SNI = "security.vercel.com"
 
 class ValidationError(ValueError):
     pass
+
+
+# Every listener edit reconciles the service. Without coalescing, a few quick
+# edits in the UI turn into a burst of `systemctl restart`, which shows up in
+# the journal as a restart storm and drops live connections repeatedly.
+MIN_RESTART_INTERVAL = 2.0
+_restart_lock = threading.Lock()
+_restart_state = {"pending": False, "last": 0.0}
+_restart_state_lock = threading.Lock()
+
+
+def _restart_core():
+    with _restart_state_lock:
+        if _restart_state["pending"]:
+            return True, "restart already pending"
+        _restart_state["pending"] = True
+    try:
+        with _restart_lock:
+            wait = MIN_RESTART_INTERVAL - (time.monotonic() - _restart_state["last"])
+            if wait > 0:
+                time.sleep(wait)
+            with _restart_state_lock:
+                _restart_state["pending"] = False
+            ok, message = services.action("core", "restart")
+            _restart_state["last"] = time.monotonic()
+            return ok, message
+    finally:
+        with _restart_state_lock:
+            _restart_state["pending"] = False
 
 
 # --------------------------------------------------------------------------
@@ -114,7 +144,8 @@ def normalize(data, listener_id=None):
 
 
 def _reject_self_loop(item):
-    """Same rule as the Rust config validator: never forward into ourselves."""
+    """Same rule as the Rust config validator, plus a check it cannot make:
+    the upstream must not be an address of this machine."""
     listen_ip = ipaddress.ip_address(item["listen_host"])
     connect_ip = ipaddress.ip_address(item["connect_ip"])
     if listen_ip == connect_ip and item["listen_port"] == item["connect_port"]:
@@ -122,9 +153,19 @@ def _reject_self_loop(item):
     if (
         item["connect_port"] == item["listen_port"]
         and connect_ip.is_loopback
-        and (listen_ip.is_loopback or listen_ip.is_unspecified)
+        and (listen_ip.is_unspecified or listen_ip.is_loopback)
     ):
         raise ValidationError("listener would connect to itself")
+
+    if netutil.is_local_address(item["connect_ip"]):
+        raise ValidationError(
+            "the upstream %s is an address of this server. Traffic to a local "
+            "address never leaves through a network interface, so the packet "
+            "sniffer cannot see the handshake and every connection fails with "
+            "'timeout waiting for fake ACK'. The upstream must be the remote "
+            "Cloudflare edge IP of your config's domain."
+            % item["connect_ip"]
+        )
 
 
 def _reject_duplicate_port(item, listener_id):
@@ -278,7 +319,7 @@ def apply(restart=True):
         result["message"] = message or "no enabled listeners; core stopped"
         return result
     if restart:
-        ok, message = services.action("core", "restart")
+        ok, message = _restart_core()
         result["restarted"] = ok
         result["message"] = message or ("restarted" if ok else "restart failed")
     return result

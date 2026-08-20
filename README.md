@@ -94,6 +94,10 @@ your panel URL. Afterwards, open the management menu at any time with:
 sni-spoof
 ```
 
+> **Before anything else:** read [docs/SETUP.md](docs/SETUP.md). It explains
+> where each piece must run and how to wire 3x-ui to it — the two things that
+> account for almost every "it does not work".
+
 ### Quick start
 
 1. `sni-spoof` → **Configs** → **Import config**, paste your `vless://` / `vmess://` / `trojan://` link.
@@ -274,6 +278,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/chess902/Sni-spoof/HEAD/inst
 ```bash
 sni-spoof
 ```
+
+> **قبل از هر کاری:** [docs/SETUP.md](docs/SETUP.md) را بخوانید. توضیح می‌دهد هر
+> قطعه کجا باید اجرا شود و 3x-ui را چطور به آن وصل کنید — همان دو چیزی که تقریباً
+> علت همهٔ «کار نمی‌کند»هاست.
 
 ### شروع سریع
 

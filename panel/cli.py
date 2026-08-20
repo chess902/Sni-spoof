@@ -209,12 +209,24 @@ def cmd_doctor(args):
                   "the fake SNI is probably burned — run: sni-spoof cli scan --apply")
         else:
             check(label, True, "tcp %sms tls %sms" % (result["tcp_ms"], result["tls_ms"]))
+        if netutil.is_local_address(item["connect_ip"]):
+            check("  ↳ upstream %s" % item["connect_ip"], False,
+                  "this is an address of THIS server — the sniffer can never "
+                  "see the handshake",
+                  "point the upstream at your config's Cloudflare edge IP, "
+                  "not at this machine")
+            continue
         upstream_ok, upstream_ms, upstream_err = netutil.tcp_probe(
             item["connect_ip"], item["connect_port"], 6
         )
         check("  ↳ upstream %s:%d" % (item["connect_ip"], item["connect_port"]),
               upstream_ok, upstream_err or "%sms" % upstream_ms,
               "sni-spoof cli listener refresh")
+        if upstream_ok and not netutil.is_cloudflare(item["connect_ip"]):
+            check("  ↳ upstream is a Cloudflare edge", False,
+                  "%s is outside Cloudflare's published ranges" % item["connect_ip"],
+                  "this technique fronts Cloudflare-hosted configs; a direct "
+                  "origin IP usually will not pass")
 
     xray_cfg = settings.get("xray")
     if xray_cfg.get("enabled"):
