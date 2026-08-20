@@ -10,8 +10,8 @@ import sys
 import time
 
 from . import (
-    __version__, auth, backup, certs, core, db, netutil, paths, qrcode, scanner,
-    services, settings, share, stats, tasks, telegram, xray,
+    __version__, auth, backup, certs, core, db, download, netutil, paths, qrcode,
+    scanner, services, settings, share, stats, tasks, telegram, xray,
 )
 
 
@@ -292,6 +292,93 @@ def cmd_doctor(args):
     else:
         print("Everything checks out.")
     return 0 if not failed else 1
+
+
+def cmd_report(args):
+    """One pasteable diagnostic bundle. Secrets are redacted."""
+    _bootstrap()
+
+    def line(text=""):
+        print(text)
+
+    line("===== sni-spoof report =====")
+    line("panel   : %s" % __version__)
+    line("core    : %s (%s)" % (core.installed_version() or "-",
+                                "installed" if core.is_installed() else "MISSING"))
+    line("xray    : %s" % (xray.installed_version() or "-"))
+    line("systemd : %s" % services.has_systemd())
+    line("arch    : %s" % download.arch())
+    line()
+
+    line("--- services ---")
+    for alias in ("core", "panel", "xray"):
+        info = services.status(alias)
+        line("  %-6s %-10s pid=%-8s since=%s" % (
+            alias, info["state"], info["pid"] or "-", info["since"] or "-"))
+    line()
+
+    line("--- listeners ---")
+    listeners = core.list_listeners()
+    if not listeners:
+        line("  (none configured)")
+    for item in listeners:
+        line("  #%d %s  %s:%d -> %s:%d" % (
+            item["id"], "on " if item["enabled"] else "off",
+            item["listen_host"], item["listen_port"],
+            item["connect_ip"], item["connect_port"]))
+        line("      fake_sni     : %s" % item["fake_sni"])
+        line("      upstream host: %s" % (item["connect_host"] or "(none — IP was set directly)"))
+        line("      cloudflare   : %s" % netutil.is_cloudflare(item["connect_ip"]))
+        line("      self/local   : %s" % netutil.is_local_address(item["connect_ip"]))
+
+        if item["connect_host"]:
+            try:
+                ips = netutil.resolve(item["connect_host"], item["connect_port"])
+                line("      dns resolves : %s" % ", ".join(ips[:6]))
+                line("      dns is CF    : %s" % all(netutil.is_cloudflare(i) for i in ips))
+            except ValueError as exc:
+                line("      dns resolves : FAILED (%s)" % exc)
+
+        ok, ms, err = netutil.tcp_probe(item["connect_ip"], item["connect_port"], 8)
+        line("      direct tcp   : %s" % ("ok %sms" % ms if ok else "FAIL %s" % err))
+        if ok:
+            server_name = item["connect_host"] or item["fake_sni"]
+            tok, tms, terr = netutil.tls_probe(
+                item["connect_ip"], item["connect_port"], server_name, 10)
+            line("      direct tls   : %s (sni=%s)" % (
+                "ok %sms" % tms if tok else "FAIL %s" % terr, server_name))
+            fok, fms, ferr = netutil.tls_probe(
+                item["connect_ip"], item["connect_port"], item["fake_sni"], 10)
+            line("      tls w/ fake  : %s" % ("ok %sms" % fms if fok else "FAIL %s" % ferr))
+
+        result = tasks.health_check(item, timeout=8)
+        line("      via listener : tcp=%s tls=%s %s" % (
+            "ok" if result["tcp_ok"] else "FAIL",
+            "-" if result["tls_ok"] is None else ("ok" if result["tls_ok"] else "FAIL"),
+            result["error"][:70]))
+        line()
+
+    xcfg = settings.get("xray")
+    line("--- xray ---")
+    line("  enabled=%s listen=%s http=%s socks=%s udp=%s" % (
+        xcfg["enabled"], xcfg["listen"], xcfg["http_port"],
+        xcfg["socks_port"], xcfg["socks_udp"]))
+    if xcfg["enabled"] and services.status("xray")["active"]:
+        host = "127.0.0.1" if xcfg["listen"] in ("0.0.0.0", "::") else xcfg["listen"]
+        line("  socks :%s -> %s" % (xcfg["socks_port"],
+                                    netutil.speaks_socks5(host, xcfg["socks_port"])[1]))
+        line("  http  :%s -> %s" % (xcfg["http_port"],
+                                    netutil.speaks_http_proxy(host, xcfg["http_port"])[1]))
+    line()
+
+    line("--- last core log lines ---")
+    ansi = __import__("re").compile(r"\x1b\[[0-9;]*m")
+    text = services.logs("core", 15)
+    for entry in text.splitlines()[-15:]:
+        line("  " + ansi.sub("", entry)[:180])
+    line()
+    line("===== end report =====")
+    return 0
 
 
 def cmd_url(args):
@@ -697,6 +784,9 @@ def build_parser():
     sub.add_parser("url", help="print the panel URL").set_defaults(func=cmd_url)
     sub.add_parser("doctor", help="diagnose why traffic is not flowing").set_defaults(
         func=cmd_doctor
+    )
+    sub.add_parser("report", help="print a pasteable diagnostic bundle").set_defaults(
+        func=cmd_report
     )
 
     user = sub.add_parser("user", help="manage panel users")

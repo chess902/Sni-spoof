@@ -710,6 +710,7 @@ sni-spoof $VERSION — $(L "مدیریت SNI Spoof" "SNI Spoof manager")
   sni-spoof uninstall       $(L "حذف کامل" "remove everything")
   sni-spoof status          $(L "وضعیت" "status summary")
   sni-spoof doctor          $(L "عیب‌یابی خودکار" "diagnose what is broken")
+  sni-spoof report          $(L "گزارش کامل برای اشتراک‌گذاری" "full diagnostic bundle")
   sni-spoof url             $(L "آدرس پنل" "panel URL")
   sni-spoof start|stop|restart [core|panel|xray]
   sni-spoof log [core|panel|xray]
@@ -730,6 +731,7 @@ case "${1:-}" in
   uninstall|remove) cmd_uninstall ;;
   status) show_status ;;
   doctor|diagnose) panel_cli doctor ;;
+  report) panel_cli report ;;
   url) panel_cli url ;;
   start|stop|restart)
     need_root
