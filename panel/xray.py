@@ -174,12 +174,43 @@ def _outbound(item, dial_host, dial_port):
     else:
         raise ValueError("unsupported protocol for Xray outbound: %s" % protocol)
 
-    return {
+    outbound = {
         "tag": "proxy",
         "protocol": protocol,
         "settings": settings_block,
         "streamSettings": stream,
     }
+
+    download = _download_settings(item, dial_host, dial_port)
+    if download:
+        outbound["streamSettings"]["downloadSettings"] = download
+    return outbound
+
+
+def _download_settings(item, dial_host, dial_port):
+    """XHTTP configs may carry a separate download path in the `extra=`
+    parameter. Ignoring it leaves the outbound half-configured, so decode it
+    and repoint its address at the local listener like the upload path."""
+    raw = (item.get("extra") or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return None
+    download = parsed.get("downloadSettings") if isinstance(parsed, dict) else None
+    if not isinstance(download, dict):
+        return None
+
+    download = json.loads(json.dumps(download))      # defensive copy
+    download["address"] = dial_host
+    download["port"] = int(dial_port)
+    download.setdefault("network", item.get("network") or "xhttp")
+    download.setdefault("security", item.get("security") or "tls")
+    tls = download.setdefault("tlsSettings", {})
+    tls.setdefault("serverName", item.get("sni") or item.get("http_host") or "")
+    tls.setdefault("fingerprint", item.get("fingerprint") or "chrome")
+    return download
 
 
 def build_config(link_raw, dial_host="127.0.0.1", dial_port=40443):

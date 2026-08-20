@@ -15,6 +15,8 @@ os.environ.setdefault("SNI_SPOOF_BIN", os.path.join(_TMP, "bin"))
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from urllib.parse import quote  # noqa: E402
+
 from panel import auth, core, db, paths, qrcode, settings, share, tlshello  # noqa: E402
 
 
@@ -195,6 +197,53 @@ class ListenerValidationTests(unittest.TestCase):
         item = core.create_listener(self._payload())
         core.toggle_listener(item["id"], False)
         self.assertEqual(core.build_config()["listeners"], [])
+
+
+class XrayOutboundTests(unittest.TestCase):
+    def test_ws_outbound_dials_the_listener_and_keeps_transport(self):
+        from panel import xray
+        link = ("vless://uuid@cf.example.com:443?encryption=none&security=tls"
+                "&sni=cf.example.com&fp=chrome&type=ws&host=edge.example.com"
+                "&path=%2Fws#n")
+        config = xray.build_config(link, "127.0.0.1", 40443)
+        outbound = config["outbounds"][0]
+        vnext = outbound["settings"]["vnext"][0]
+        self.assertEqual(vnext["address"], "127.0.0.1")
+        self.assertEqual(vnext["port"], 40443)
+        stream = outbound["streamSettings"]
+        self.assertEqual(stream["tlsSettings"]["serverName"], "cf.example.com")
+        self.assertEqual(stream["wsSettings"]["path"], "/ws")
+        self.assertEqual(stream["wsSettings"]["headers"]["Host"], "edge.example.com")
+
+    def test_xhttp_extra_becomes_download_settings(self):
+        from panel import xray
+        extra = json.dumps({"downloadSettings": {
+            "network": "xhttp",
+            "xhttpSettings": {"path": "/dl", "host": "dl.example.com", "mode": "auto"},
+        }})
+        link = ("vless://uuid@cf.example.com:443?encryption=none&security=tls"
+                "&sni=cf.example.com&type=xhttp&mode=auto&host=cf.example.com"
+                "&path=%2Fup&extra=" + quote(extra) + "#n")
+        stream = xray.build_config(link, "127.0.0.1", 40443)["outbounds"][0]["streamSettings"]
+        download = stream["downloadSettings"]
+        self.assertEqual(download["address"], "127.0.0.1")
+        self.assertEqual(download["port"], 40443)
+        self.assertEqual(download["xhttpSettings"]["path"], "/dl")
+        self.assertEqual(download["tlsSettings"]["serverName"], "cf.example.com")
+
+    def test_no_extra_means_no_download_settings(self):
+        from panel import xray
+        link = "vless://uuid@cf.example.com:443?security=tls&sni=cf.example.com&type=ws#n"
+        stream = xray.build_config(link, "127.0.0.1", 40443)["outbounds"][0]["streamSettings"]
+        self.assertNotIn("downloadSettings", stream)
+
+    def test_routing_needs_no_geodata_files(self):
+        from panel import xray
+        link = "vless://uuid@cf.example.com:443?security=tls&sni=cf.example.com&type=ws#n"
+        rules = xray.build_config(link, "127.0.0.1", 40443)["routing"]["rules"]
+        flat = json.dumps(rules)
+        self.assertNotIn("geoip:", flat)
+        self.assertNotIn("geosite:", flat)
 
 
 class AuthTests(unittest.TestCase):

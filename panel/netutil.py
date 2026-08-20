@@ -237,6 +237,42 @@ def _recv_exact(sock, count):
     return buf
 
 
+def http_through(host, port, server_name, path="/", timeout=12):
+    """Send a real HTTPS request through host:port using `server_name` as SNI.
+
+    Pointed at a sni-spoof listener this exercises exactly one hop — the
+    spoofing forwarder and the Cloudflare edge behind it — with no Xray, no
+    vless and no client involved. Any HTTP status back (even 400 or 404) proves
+    that hop works; a reset proves it does not."""
+    started = time.time()
+    context = ssl.create_default_context()
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout) as raw:
+            with context.wrap_socket(raw, server_hostname=server_name) as tls:
+                tls.settimeout(timeout)
+                tls.sendall(
+                    ("HEAD %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: sni-spoof-panel\r\n"
+                     "Connection: close\r\n\r\n" % (path, server_name)).encode()
+                )
+                chunks = []
+                while len(b"".join(chunks)) < 2048:
+                    data = tls.recv(1024)
+                    if not data:
+                        break
+                    chunks.append(data)
+    except (OSError, ssl.SSLError) as exc:
+        return False, round((time.time() - started) * 1000, 1), "", str(exc)
+
+    head = b"".join(chunks).decode("utf-8", "replace")
+    status = head.split("\r\n", 1)[0] if head else ""
+    server = ""
+    for line in head.split("\r\n"):
+        if line.lower().startswith("server:"):
+            server = line.split(":", 1)[1].strip()
+            break
+    return bool(status), round((time.time() - started) * 1000, 1), status, server
+
+
 def speaks_socks5(host, port, timeout=5):
     """Confirm a SOCKS5 server answers on this port. Wiring an app to the HTTP
     port instead shows up in the Xray log as

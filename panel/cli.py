@@ -554,6 +554,21 @@ def cmd_listener(args):
                 ))
                 if item["error"]:
                     print("    %s" % item["error"])
+                # One real HTTPS request through the listener isolates this hop
+                # from Xray, vless and the client entirely.
+                listener = core.get_listener(item["listener_id"])
+                if listener and item["tcp_ok"]:
+                    host = listener["listen_host"]
+                    if host in ("0.0.0.0", "::"):
+                        host = "127.0.0.1"
+                    name = listener["connect_host"] or listener["fake_sni"]
+                    ok, ms, status, server = netutil.http_through(
+                        host, listener["listen_port"], name)
+                    if ok:
+                        print("    https through listener: %s  (server: %s, %sms)"
+                              % (status, server or "-", ms))
+                    else:
+                        print("    https through listener: FAIL %s" % server)
     elif args.action == "refresh":
         for item in core.list_listeners(enabled_only=True):
             if not item["connect_host"]:
