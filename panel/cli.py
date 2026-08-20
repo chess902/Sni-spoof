@@ -166,8 +166,11 @@ def cmd_doctor(args):
     _bootstrap()
     checks = []
 
-    def check(name, ok, detail="", fix=""):
-        checks.append({"check": name, "ok": bool(ok), "detail": detail, "fix": fix})
+    def check(name, ok, detail="", fix="", skipped=False):
+        checks.append({
+            "check": name, "ok": bool(ok), "detail": detail,
+            "fix": fix, "skipped": bool(skipped),
+        })
 
     check("core binary installed", core.is_installed(),
           paths.CORE_BIN if core.is_installed() else "missing",
@@ -182,13 +185,19 @@ def cmd_doctor(args):
     config_exists = os.path.exists(paths.CORE_CONFIG)
     check("core config written", config_exists, paths.CORE_CONFIG,
           "sni-spoof cli core apply")
-    check("core marked ready", os.path.exists(paths.CORE_READY),
-          "flag gating the systemd unit", "sni-spoof cli core apply")
 
-    svc = services.status("core")
-    check("core service running", svc["active"],
-          "%s/%s" % (svc["state"], svc["sub"] or "-"),
-          "sni-spoof cli service core restart  ·  sni-spoof log core")
+    # Without listeners everything downstream is a consequence, not a cause;
+    # report those as skipped so one actionable line stands out.
+    if not enabled:
+        check("core marked ready", True, "skipped — nothing to serve yet", skipped=True)
+        check("core service running", True, "skipped — nothing to serve yet", skipped=True)
+    else:
+        check("core marked ready", os.path.exists(paths.CORE_READY),
+              "flag gating the systemd unit", "sni-spoof cli core apply")
+        svc = services.status("core")
+        check("core service running", svc["active"],
+              "%s/%s" % (svc["state"], svc["sub"] or "-"),
+              "sni-spoof cli service core restart  ·  sni-spoof log core")
 
     for item in enabled:
         result = tasks.health_check(item, timeout=6)
@@ -228,9 +237,14 @@ def cmd_doctor(args):
     print()
     failed = 0
     for item in checks:
-        mark = "\033[32mOK  \033[0m" if item["ok"] else "\033[31mFAIL\033[0m"
+        if item["skipped"]:
+            mark = "\033[2m--  \033[0m"
+        elif item["ok"]:
+            mark = "\033[32mOK  \033[0m"
+        else:
+            mark = "\033[31mFAIL\033[0m"
         print("  [%s] %-34s %s" % (mark, item["check"], item["detail"]))
-        if not item["ok"]:
+        if not item["ok"] and not item["skipped"]:
             failed += 1
             if item["fix"]:
                 print("         \033[33m↳ %s\033[0m" % item["fix"])
