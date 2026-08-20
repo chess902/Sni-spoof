@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # One-line installer:
-#   bash <(curl -fsSL https://raw.githubusercontent.com/chess902/Sni-spoof/main/install.sh)
+#   bash <(curl -fsSL https://raw.githubusercontent.com/chess902/Sni-spoof/HEAD/install.sh)
+#
+# HEAD always resolves to the repository's default branch, whatever it is
+# named, so this keeps working on forks and on repos without a `main`.
 #
 # Optional environment overrides:
-#   SNI_SPOOF_REPO=owner/repo   SNI_SPOOF_BRANCH=main   PANEL_PORT=2095
+#   SNI_SPOOF_REPO=owner/repo   SNI_SPOOF_BRANCH=some-branch   PANEL_PORT=2095
 set -euo pipefail
 
 REPO="${SNI_SPOOF_REPO:-chess902/Sni-spoof}"
-BRANCH="${SNI_SPOOF_BRANCH:-main}"
+BRANCH="${SNI_SPOOF_BRANCH:-HEAD}"
 PORT="${PANEL_PORT:-2095}"
 
 RED=$'\e[31m'; GRN=$'\e[32m'; BLU=$'\e[36m'; RST=$'\e[0m'
@@ -44,8 +47,8 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 info "Downloading $REPO ($BRANCH)…"
-curl -fsSL "https://github.com/$REPO/archive/refs/heads/$BRANCH.tar.gz" -o "$TMP/src.tar.gz" \
-  || die "Download failed — check the network or set SNI_SPOOF_REPO"
+curl -fsSL "https://github.com/$REPO/archive/$BRANCH.tar.gz" -o "$TMP/src.tar.gz" \
+  || die "Download failed — check the network, or set SNI_SPOOF_REPO / SNI_SPOOF_BRANCH"
 tar -xzf "$TMP/src.tar.gz" -C "$TMP"
 SRC="$(find "$TMP" -maxdepth 1 -mindepth 1 -type d | head -1)"
 [[ -d "$SRC/panel" ]] || die "Unexpected archive layout"

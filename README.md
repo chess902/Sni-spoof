@@ -84,7 +84,7 @@ No pip packages are installed. The panel uses only the Python standard library.
 ### Install
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/chess902/Sni-spoof/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/chess902/Sni-spoof/HEAD/install.sh)
 ```
 
 The installer asks for a panel port, username and password, downloads the core binary and prints
@@ -265,7 +265,7 @@ Every path is overridable through `SNI_SPOOF_ETC`, `SNI_SPOOF_DATA`, `SNI_SPOOF_
 ### نصب
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/chess902/Sni-spoof/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/chess902/Sni-spoof/HEAD/install.sh)
 ```
 
 نصب‌کننده پورت پنل، نام کاربری و رمز را می‌پرسد، باینری هسته را دانلود می‌کند و آدرس پنل را

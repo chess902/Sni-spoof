@@ -9,9 +9,21 @@ ETC_DIR="${SNI_SPOOF_ETC:-/etc/sni-spoof}"
 DATA_DIR="${SNI_SPOOF_DATA:-/var/lib/sni-spoof}"
 LOG_DIR="${SNI_SPOOF_LOG:-/var/log/sni-spoof}"
 BIN_DIR="${SNI_SPOOF_BIN:-/usr/local/bin}"
-REPO="${SNI_SPOOF_REPO:-chess902/Sni-spoof}"
-REPO_BRANCH="${SNI_SPOOF_BRANCH:-main}"
 LANG_FILE="$ETC_DIR/lang"
+ORIGIN_FILE="$ETC_DIR/origin"
+
+# Remember where this install came from, so `update` follows the same branch
+# instead of assuming the repository's default one.
+REPO="${SNI_SPOOF_REPO:-}"
+REPO_BRANCH="${SNI_SPOOF_BRANCH:-}"
+if [[ -r "$ORIGIN_FILE" ]]; then
+  # shellcheck disable=SC1090
+  . "$ORIGIN_FILE"
+  REPO="${REPO:-${SAVED_REPO:-}}"
+  REPO_BRANCH="${REPO_BRANCH:-${SAVED_BRANCH:-}}"
+fi
+REPO="${REPO:-chess902/Sni-spoof}"
+REPO_BRANCH="${REPO_BRANCH:-HEAD}"
 CORE_SERVICE="sni-spoof-core"
 PANEL_SERVICE="sni-spoof-panel"
 XRAY_SERVICE="sni-spoof-xray"
@@ -131,10 +143,12 @@ check_python() {
 
 fetch_source() {
   local tmp; tmp="$(mktemp -d)"
-  local url="https://github.com/$REPO/archive/refs/heads/$REPO_BRANCH.tar.gz"
+  local url="https://github.com/$REPO/archive/$REPO_BRANCH.tar.gz"
   info "دریافت سورس پنل…" "Downloading the panel source…" >&2
   if ! curl -fsSL "$url" -o "$tmp/src.tar.gz"; then
-    err "دانلود سورس ناموفق بود" "Could not download the source"; rm -rf "$tmp"; return 1
+    err "دانلود سورس ناموفق بود ($REPO@$REPO_BRANCH)" \
+        "Could not download the source ($REPO@$REPO_BRANCH)"
+    rm -rf "$tmp"; return 1
   fi
   tar -xzf "$tmp/src.tar.gz" -C "$tmp"
   local root; root="$(find "$tmp" -maxdepth 1 -type d -name '*-*' | head -1)"
@@ -160,7 +174,16 @@ install_files() {
   chmod 700 "$DATA_DIR"
   chmod 755 "$ETC_DIR"
   find "$INSTALL_DIR" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+  save_origin
   systemctl daemon-reload >/dev/null 2>&1 || true
+}
+
+save_origin() {
+  mkdir -p "$ETC_DIR"
+  {
+    printf 'SAVED_REPO=%s\n' "$REPO"
+    printf 'SAVED_BRANCH=%s\n' "$REPO_BRANCH"
+  } > "$ORIGIN_FILE"
 }
 
 cmd_install() {
@@ -673,6 +696,9 @@ sni-spoof $VERSION — $(L "مدیریت SNI Spoof" "SNI Spoof manager")
   sni-spoof bbr             $(L "فعال‌سازی BBR" "enable BBR")
   sni-spoof backup          $(L "ساخت بکاپ" "create a backup")
   sni-spoof cli ...         $(L "دسترسی مستقیم به CLI پنل" "raw panel CLI access")
+
+$(L "منبع نصب" "Install source"): $REPO@$REPO_BRANCH
+$(L "برای تغییر: SNI_SPOOF_REPO / SNI_SPOOF_BRANCH" "Override with SNI_SPOOF_REPO / SNI_SPOOF_BRANCH")
 USAGE
 }
 
