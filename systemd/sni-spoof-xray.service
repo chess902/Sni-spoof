@@ -1,0 +1,22 @@
+[Unit]
+Description=sni-spoof Xray outbound (HTTP/SOCKS proxies)
+Documentation=https://github.com/chess902/Sni-spoof
+After=network-online.target sni-spoof-core.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/xray run -config /etc/sni-spoof/xray.json
+Environment=XRAY_LOCATION_ASSET=/var/lib/sni-spoof/xray-assets
+Restart=always
+RestartSec=3
+LimitNOFILE=1048576
+NoNewPrivileges=true
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/sni-spoof /var/log/sni-spoof
+
+[Install]
+WantedBy=multi-user.target

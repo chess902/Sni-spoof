@@ -1,0 +1,700 @@
+#!/usr/bin/env bash
+# sni-spoof manager - install, operate and troubleshoot the SNI spoofing stack.
+# Bilingual (fa/en) interactive menu plus a scriptable command line.
+set -uo pipefail
+
+VERSION="1.0.0"
+INSTALL_DIR="${SNI_SPOOF_INSTALL_DIR:-/opt/sni-spoof}"
+ETC_DIR="${SNI_SPOOF_ETC:-/etc/sni-spoof}"
+DATA_DIR="${SNI_SPOOF_DATA:-/var/lib/sni-spoof}"
+LOG_DIR="${SNI_SPOOF_LOG:-/var/log/sni-spoof}"
+BIN_DIR="${SNI_SPOOF_BIN:-/usr/local/bin}"
+REPO="${SNI_SPOOF_REPO:-chess902/Sni-spoof}"
+REPO_BRANCH="${SNI_SPOOF_BRANCH:-main}"
+LANG_FILE="$ETC_DIR/lang"
+CORE_SERVICE="sni-spoof-core"
+PANEL_SERVICE="sni-spoof-panel"
+XRAY_SERVICE="sni-spoof-xray"
+
+RED=$'\e[31m'; GRN=$'\e[32m'; YLW=$'\e[33m'; BLU=$'\e[36m'; DIM=$'\e[2m'; BLD=$'\e[1m'; RST=$'\e[0m'
+
+UI_LANG="fa"
+[[ -f "$LANG_FILE" ]] && UI_LANG="$(cat "$LANG_FILE" 2>/dev/null || echo fa)"
+[[ "$UI_LANG" != "en" ]] && UI_LANG="fa"
+
+# L <persian> <english>
+L() { if [[ "$UI_LANG" == "fa" ]]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }
+say()  { printf '%s\n' "$(L "$1" "$2")"; }
+ok()   { printf '%s✅ %s%s\n' "$GRN" "$(L "$1" "$2")" "$RST"; }
+warn() { printf '%s⚠  %s%s\n' "$YLW" "$(L "$1" "$2")" "$RST"; }
+err()  { printf '%s✖  %s%s\n' "$RED" "$(L "$1" "$2")" "$RST" >&2; }
+info() { printf '%s→  %s%s\n' "$BLU" "$(L "$1" "$2")" "$RST"; }
+hr()   { printf '%s────────────────────────────────────────────────────────%s\n' "$DIM" "$RST"; }
+
+need_root() {
+  if [[ "$(id -u)" -ne 0 ]]; then
+    err "این دستور به دسترسی root نیاز دارد (با sudo اجرا کنید)" \
+        "This command needs root privileges (run with sudo)"
+    exit 1
+  fi
+}
+
+panel_cli() {
+  if [[ ! -f "$INSTALL_DIR/panel/cli.py" ]]; then
+    err "پنل نصب نیست" "The panel is not installed"
+    return 1
+  fi
+  PYTHONPATH="$INSTALL_DIR" python3 -m panel "$@"
+}
+
+svc() { systemctl "$1" "$2" >/dev/null 2>&1; }
+
+server_ip() {
+  local ip
+  ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  [[ -z "$ip" ]] && ip="$(panel_cli ip --local 2>/dev/null || true)"
+  printf '%s' "${ip:-127.0.0.1}"
+}
+
+svc_state() {
+  if ! command -v systemctl >/dev/null 2>&1; then printf 'n/a'; return; fi
+  local state; state="$(systemctl is-active "$1" 2>/dev/null || true)"
+  case "$state" in
+    active) printf '%sactive%s' "$GRN" "$RST" ;;
+    inactive|failed|"") printf '%s%s%s' "$RED" "${state:-unknown}" "$RST" ;;
+    *) printf '%s%s%s' "$YLW" "$state" "$RST" ;;
+  esac
+}
+
+pause() {
+  printf '\n%s' "$(L "برای ادامه Enter بزنید…" "Press Enter to continue…")"
+  read -r _ || true
+}
+
+ask() { # ask <var> <fa prompt> <en prompt> [default]
+  local __var="$1" prompt reply
+  prompt="$(L "$2" "$3")"
+  [[ -n "${4:-}" ]] && prompt="$prompt [${4}]"
+  read -r -p "$prompt: " reply
+  [[ -z "$reply" && -n "${4:-}" ]] && reply="$4"
+  printf -v "$__var" '%s' "$reply"
+}
+
+confirm() {
+  local reply
+  read -r -p "$(L "$1" "$2") [y/N]: " reply
+  [[ "$reply" =~ ^[Yy]$ ]]
+}
+
+# --------------------------------------------------------------------------
+# install / update / uninstall
+# --------------------------------------------------------------------------
+detect_os() {
+  if [[ -f /etc/os-release ]]; then . /etc/os-release; printf '%s' "${ID:-unknown}"; else printf 'unknown'; fi
+}
+
+pkg_install() {
+  local os; os="$(detect_os)"
+  case "$os" in
+    ubuntu|debian|linuxmint|pop|kali|raspbian)
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -qq
+      apt-get install -y -qq python3 curl tar openssl iproute2 ca-certificates >/dev/null
+      ;;
+    centos|rhel|almalinux|rocky|fedora|ol)
+      local mgr=dnf; command -v dnf >/dev/null 2>&1 || mgr=yum
+      $mgr install -y -q python3 curl tar openssl iproute ca-certificates >/dev/null
+      ;;
+    alpine)
+      apk add --no-cache python3 curl tar openssl iproute2 ca-certificates >/dev/null
+      ;;
+    arch|manjaro)
+      pacman -Sy --noconfirm python curl tar openssl iproute2 ca-certificates >/dev/null
+      ;;
+    *)
+      warn "توزیع ناشناخته؛ وابستگی‌ها را دستی نصب کنید" \
+           "Unknown distribution; install python3/curl/tar/openssl yourself"
+      ;;
+  esac
+}
+
+check_python() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    err "python3 پیدا نشد" "python3 was not found"; exit 1
+  fi
+  local version
+  version="$(python3 -c 'import sys; print("%d%02d" % sys.version_info[:2])')"
+  if [[ "$version" -lt 308 ]]; then
+    err "پایتون ۳.۸ یا بالاتر لازم است" "Python 3.8 or newer is required"; exit 1
+  fi
+}
+
+fetch_source() {
+  local tmp; tmp="$(mktemp -d)"
+  local url="https://github.com/$REPO/archive/refs/heads/$REPO_BRANCH.tar.gz"
+  info "دریافت سورس پنل…" "Downloading the panel source…" >&2
+  if ! curl -fsSL "$url" -o "$tmp/src.tar.gz"; then
+    err "دانلود سورس ناموفق بود" "Could not download the source"; rm -rf "$tmp"; return 1
+  fi
+  tar -xzf "$tmp/src.tar.gz" -C "$tmp"
+  local root; root="$(find "$tmp" -maxdepth 1 -type d -name '*-*' | head -1)"
+  [[ -z "$root" ]] && { err "آرشیو نامعتبر" "Invalid archive"; rm -rf "$tmp"; return 1; }
+  printf '%s' "$root"
+}
+
+install_files() {
+  local src="$1"
+  mkdir -p "$INSTALL_DIR" "$ETC_DIR" "$DATA_DIR" "$LOG_DIR"
+  rm -rf "$INSTALL_DIR/panel"
+  cp -r "$src/panel" "$INSTALL_DIR/panel"
+  mkdir -p "$INSTALL_DIR/data"
+  [[ -f "$src/data/scan-snis.txt" ]] && cp "$src/data/scan-snis.txt" "$INSTALL_DIR/data/scan-snis.txt"
+  [[ -f "$src/data/scan-snis.txt" && ! -f "$ETC_DIR/scan-snis.txt" ]] && \
+    cp "$src/data/scan-snis.txt" "$ETC_DIR/scan-snis.txt"
+  # Replace atomically: bash reads the running script lazily, so overwriting
+  # it in place would corrupt an in-progress update.
+  cp "$src/scripts/sni-spoof" "$BIN_DIR/.sni-spoof.new"
+  chmod +x "$BIN_DIR/.sni-spoof.new"
+  mv -f "$BIN_DIR/.sni-spoof.new" "$BIN_DIR/sni-spoof"
+  cp "$src"/systemd/*.service /etc/systemd/system/ 2>/dev/null || true
+  chmod 700 "$DATA_DIR"
+  chmod 755 "$ETC_DIR"
+  find "$INSTALL_DIR" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+  systemctl daemon-reload >/dev/null 2>&1 || true
+}
+
+cmd_install() {
+  need_root
+  hr
+  say "نصب SNI Spoof Panel" "Installing SNI Spoof Panel"
+  hr
+  pkg_install
+  check_python
+
+  local src
+  if [[ -f "$(dirname "$0")/../panel/cli.py" ]]; then
+    src="$(cd "$(dirname "$0")/.." && pwd)"
+    info "نصب از سورس محلی: $src" "Installing from the local checkout: $src"
+  else
+    src="$(fetch_source)" || exit 1
+  fi
+  install_files "$src"
+
+  local port user pass
+  port="${1:-}"
+  if [[ -z "$port" ]]; then
+    ask port "پورت پنل" "Panel port" "2095"
+  fi
+  ask user "نام کاربری پنل" "Panel username" "admin"
+  ask pass "رمز عبور (خالی = تولید خودکار)" "Password (blank = generated)" ""
+
+  local args=(--username "$user" --port "$port" --language "$UI_LANG")
+  [[ -n "$pass" ]] && args+=(--password "$pass")
+  local setup_json
+  setup_json="$(panel_cli setup "${args[@]}")" || { err "راه‌اندازی ناموفق" "Setup failed"; exit 1; }
+
+  info "نصب هستهٔ sni-spoof-rs…" "Installing the sni-spoof-rs core…"
+  panel_cli core install || warn "نصب هسته ناموفق بود؛ بعداً از منو تلاش کنید" \
+                                 "Core install failed; retry later from the menu"
+
+  systemctl enable --now "$PANEL_SERVICE" >/dev/null 2>&1 || true
+  open_firewall "$port"
+
+  hr
+  ok "نصب کامل شد" "Installation finished"
+  printf '%s\n' "$setup_json" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+print("  URL      : %s" % data["url"])
+print("  username : %s" % data["username"])
+print("  password : %s" % data["password"])
+' 2>/dev/null || printf '%s\n' "$setup_json"
+  hr
+  say "با دستور «sni-spoof» منوی مدیریت را باز کنید" \
+      "Run 'sni-spoof' to open the management menu"
+}
+
+cmd_update() {
+  need_root
+  info "بروزرسانی پنل…" "Updating the panel…"
+  local src
+  src="$(fetch_source)" || return 1
+  install_files "$src"
+  systemctl restart "$PANEL_SERVICE" >/dev/null 2>&1 || true
+  ok "پنل بروزرسانی شد" "Panel updated"
+  info "بروزرسانی هسته…" "Updating the core…"
+  panel_cli core install && systemctl restart "$CORE_SERVICE" >/dev/null 2>&1
+  ok "بروزرسانی کامل شد" "Update complete"
+}
+
+cmd_uninstall() {
+  need_root
+  if ! confirm "همه چیز حذف شود؟ (کانفیگ‌ها و دیتابیس)" "Remove everything (configs and database)?"; then
+    return 0
+  fi
+  local keep_data=0
+  confirm "دیتابیس و بکاپ‌ها نگه داشته شوند؟" "Keep the database and backups?" && keep_data=1
+
+  for unit in "$PANEL_SERVICE" "$CORE_SERVICE" "$XRAY_SERVICE"; do
+    systemctl disable --now "$unit" >/dev/null 2>&1 || true
+    rm -f "/etc/systemd/system/$unit.service"
+  done
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  rm -rf "$INSTALL_DIR"
+  rm -f "$BIN_DIR/sni-spoof-rs"
+  if [[ "$keep_data" -eq 0 ]]; then
+    rm -rf "$ETC_DIR" "$DATA_DIR" "$LOG_DIR"
+    rm -f "$BIN_DIR/xray"
+  fi
+  rm -f "$BIN_DIR/sni-spoof"
+  ok "حذف شد" "Uninstalled"
+}
+
+open_firewall() {
+  local port="${1:-}"
+  [[ -z "$port" ]] && return 0
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+    ufw allow "$port/tcp" >/dev/null 2>&1 && \
+      info "پورت $port در ufw باز شد" "Opened port $port in ufw"
+  elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+    firewall-cmd --permanent --add-port="$port/tcp" >/dev/null 2>&1
+    firewall-cmd --reload >/dev/null 2>&1
+    info "پورت $port در firewalld باز شد" "Opened port $port in firewalld"
+  fi
+  return 0
+}
+
+# --------------------------------------------------------------------------
+# status & services
+# --------------------------------------------------------------------------
+show_status() {
+  hr
+  printf '%s%s%s  %sv%s%s\n' "$BLD" "$(L "وضعیت سیستم" "System status")" "$RST" "$DIM" "$VERSION" "$RST"
+  hr
+  printf '  %-28s %s\n' "$(L "سرویس پنل" "panel service")"  "$(svc_state "$PANEL_SERVICE")"
+  printf '  %-28s %s\n' "$(L "سرویس هسته" "core service")"  "$(svc_state "$CORE_SERVICE")"
+  printf '  %-28s %s\n' "$(L "سرویس Xray" "xray service")"  "$(svc_state "$XRAY_SERVICE")"
+  hr
+  panel_cli status 2>/dev/null || warn "پنل هنوز راه‌اندازی نشده" "The panel is not initialised yet"
+  hr
+}
+
+menu_services() {
+  while true; do
+    hr
+    say "مدیریت سرویس‌ها" "Service control"
+    hr
+    printf '  %-28s %s\n' "core"  "$(svc_state "$CORE_SERVICE")"
+    printf '  %-28s %s\n' "panel" "$(svc_state "$PANEL_SERVICE")"
+    printf '  %-28s %s\n' "xray"  "$(svc_state "$XRAY_SERVICE")"
+    hr
+    echo "  1) $(L "ری‌استارت هسته" "Restart core")"
+    echo "  2) $(L "توقف هسته" "Stop core")"
+    echo "  3) $(L "شروع هسته" "Start core")"
+    echo "  4) $(L "ری‌استارت پنل" "Restart panel")"
+    echo "  5) $(L "ری‌استارت Xray" "Restart xray")"
+    echo "  6) $(L "فعال‌سازی خودکار همه" "Enable all at boot")"
+    echo "  7) $(L "غیرفعال‌سازی خودکار همه" "Disable all at boot")"
+    echo "  0) $(L "بازگشت" "Back")"
+    local choice; read -r -p "> " choice
+    case "$choice" in
+      1) svc restart "$CORE_SERVICE"; ok "انجام شد" "Done" ;;
+      2) svc stop "$CORE_SERVICE"; ok "انجام شد" "Done" ;;
+      3) svc start "$CORE_SERVICE"; ok "انجام شد" "Done" ;;
+      4) systemctl restart "$PANEL_SERVICE" >/dev/null 2>&1 & ok "انجام شد" "Done" ;;
+      5) svc restart "$XRAY_SERVICE"; ok "انجام شد" "Done" ;;
+      6) for u in "$CORE_SERVICE" "$PANEL_SERVICE" "$XRAY_SERVICE"; do svc enable "$u"; done; ok "انجام شد" "Done" ;;
+      7) for u in "$CORE_SERVICE" "$PANEL_SERVICE" "$XRAY_SERVICE"; do svc disable "$u"; done; ok "انجام شد" "Done" ;;
+      0) return ;;
+      *) err "گزینه نامعتبر" "Invalid option" ;;
+    esac
+  done
+}
+
+menu_logs() {
+  hr
+  echo "  1) core   2) panel   3) xray"
+  local choice unit; read -r -p "> " choice
+  case "$choice" in
+    1) unit="$CORE_SERVICE" ;;
+    2) unit="$PANEL_SERVICE" ;;
+    3) unit="$XRAY_SERVICE" ;;
+    *) return ;;
+  esac
+  say "برای خروج Ctrl+C بزنید" "Press Ctrl+C to exit"
+  journalctl -u "$unit" -n 200 -f --no-pager || true
+}
+
+# --------------------------------------------------------------------------
+# listeners / links / scanner
+# --------------------------------------------------------------------------
+menu_listeners() {
+  while true; do
+    hr
+    say "لیسنرها" "Listeners"
+    hr
+    panel_cli listener list
+    hr
+    echo "  1) $(L "افزودن لیسنر" "Add listener")"
+    echo "  2) $(L "حذف لیسنر" "Delete listener")"
+    echo "  3) $(L "فعال/غیرفعال" "Enable / disable")"
+    echo "  4) $(L "تست سلامت" "Health test")"
+    echo "  5) $(L "بروزرسانی IP مقصد" "Refresh upstream IP")"
+    echo "  6) $(L "اعمال کانفیگ و ری‌استارت" "Apply config and restart")"
+    echo "  0) $(L "بازگشت" "Back")"
+    local choice; read -r -p "> " choice
+    case "$choice" in
+      1)
+        local name host port sni lhost
+        ask name "نام" "Name" "node"
+        ask host "دامنه یا IP مقصد" "Upstream domain or IP" ""
+        ask port "پورت شنود محلی" "Local listen port" "40443"
+        ask lhost "آدرس شنود" "Listen address" "0.0.0.0"
+        ask sni "SNI جعلی" "Fake SNI" "security.vercel.com"
+        panel_cli listener add --name "$name" --connect-host "$host" \
+          --listen-port "$port" --listen-host "$lhost" --fake-sni "$sni" \
+          && ok "افزوده شد" "Added"
+        ;;
+      2) local id; ask id "شناسه لیسنر" "Listener id" ""
+         [[ -n "$id" ]] && panel_cli listener delete --id "$id" && ok "حذف شد" "Deleted" ;;
+      3) local id state; ask id "شناسه لیسنر" "Listener id" ""
+         ask state "۱=فعال ۰=غیرفعال" "1=enable 0=disable" "1"
+         panel_cli listener toggle --id "$id" --enabled "$state" >/dev/null && ok "انجام شد" "Done" ;;
+      4) panel_cli listener test ;;
+      5) panel_cli listener refresh ;;
+      6) panel_cli listener apply >/dev/null && ok "اعمال شد" "Applied" ;;
+      0) return ;;
+      *) err "گزینه نامعتبر" "Invalid option" ;;
+    esac
+    pause
+  done
+}
+
+menu_links() {
+  while true; do
+    hr
+    say "کانفیگ‌ها" "Configs"
+    hr
+    panel_cli link list
+    hr
+    echo "  1) $(L "افزودن کانفیگ (vless/vmess/trojan)" "Import config (vless/vmess/trojan)")"
+    echo "  2) $(L "نمایش لینک کلاینت + QR" "Show client link + QR")"
+    echo "  3) $(L "حذف کانفیگ" "Delete config")"
+    echo "  4) $(L "لینک ساب‌اسکریپشن" "Subscription URL")"
+    echo "  0) $(L "بازگشت" "Back")"
+    local choice; read -r -p "> " choice
+    case "$choice" in
+      1)
+        local link port sni lhost
+        say "لینک را وارد کنید:" "Paste the link:"
+        read -r link
+        ask port "پورت شنود" "Listen port" "40443"
+        ask lhost "آدرس شنود" "Listen address" "0.0.0.0"
+        ask sni "SNI جعلی" "Fake SNI" "security.vercel.com"
+        printf '%s' "$link" | panel_cli link import - --listen-port "$port" \
+          --listen-host "$lhost" --fake-sni "$sni"
+        ;;
+      2) local id host; ask id "شناسه کانفیگ" "Config id" ""
+         ask host "آدرسی که کلاینت وصل می‌شود" "Address clients connect to" "$(server_ip)"
+         panel_cli link show --id "$id" --host "$host" ;;
+      3) local id; ask id "شناسه کانفیگ" "Config id" ""
+         [[ -n "$id" ]] && panel_cli link delete --id "$id" >/dev/null && ok "حذف شد" "Deleted" ;;
+      4) panel_cli subscription ;;
+      0) return ;;
+      *) err "گزینه نامعتبر" "Invalid option" ;;
+    esac
+    pause
+  done
+}
+
+menu_scan() {
+  hr
+  say "اسکنر SNI — دامنه‌هایی که از DPI عبور می‌کنند" \
+      "SNI scanner — find domains that still pass your DPI"
+  hr
+  local target timeout concurrency apply
+  ask target "IP هدف" "Target IP" "104.18.4.130:443"
+  ask timeout "تایم‌اوت (ثانیه)" "Timeout (seconds)" "6"
+  ask concurrency "همزمانی" "Concurrency" "20"
+  local args=(--target "$target" --timeout "$timeout" --concurrency "$concurrency")
+  if confirm "بهترین نتیجه روی همهٔ لیسنرها اعمال شود؟" "Apply the best hit to every listener?"; then
+    args+=(--apply)
+  fi
+  panel_cli scan "${args[@]}"
+}
+
+# --------------------------------------------------------------------------
+# panel administration
+# --------------------------------------------------------------------------
+menu_panel() {
+  while true; do
+    hr
+    say "تنظیمات پنل" "Panel settings"
+    hr
+    panel_cli url 2>/dev/null
+    hr
+    echo "  1) $(L "تغییر پورت" "Change port")"
+    echo "  2) $(L "تغییر رمز کاربر" "Reset a password")"
+    echo "  3) $(L "افزودن کاربر" "Add user")"
+    echo "  4) $(L "مسیر مخفی پنل" "Secret base path")"
+    echo "  5) $(L "گواهی self-signed + TLS" "Self-signed certificate + TLS")"
+    echo "  6) $(L "گواهی Let's Encrypt" "Let's Encrypt certificate")"
+    echo "  7) $(L "غیرفعال کردن TLS" "Disable TLS")"
+    echo "  8) $(L "محدود کردن به IP خاص" "Restrict to specific IPs")"
+    echo "  0) $(L "بازگشت" "Back")"
+    local choice; read -r -p "> " choice
+    case "$choice" in
+      1) local port; ask port "پورت جدید" "New port" "2095"
+         if panel_cli settings set panel port "$port" >/dev/null; then
+           open_firewall "$port"
+           systemctl restart "$PANEL_SERVICE" >/dev/null 2>&1
+           ok "پورت تغییر کرد" "Port changed"
+         fi ;;
+      2) local user pass; ask user "نام کاربری" "Username" "admin"
+         ask pass "رمز جدید (خالی = تصادفی)" "New password (blank = random)" ""
+         if [[ -n "$pass" ]]; then panel_cli user passwd "$user" --password "$pass";
+         else panel_cli user passwd "$user"; fi ;;
+      3) local user pass; ask user "نام کاربری" "Username" ""
+         ask pass "رمز عبور" "Password" ""
+         panel_cli user add "$user" --password "$pass" ;;
+      4) local path; ask path "مسیر پنل (مثلاً /secret)" "Base path (e.g. /secret)" "/"
+         panel_cli settings set panel base_path "\"$path\"" >/dev/null
+         systemctl restart "$PANEL_SERVICE" >/dev/null 2>&1
+         ok "اعمال شد" "Applied" ;;
+      5) local cn; ask cn "دامنه یا IP" "Domain or IP" "$(server_ip)"
+         if panel_cli cert self-signed --domain "$cn"; then
+           systemctl restart "$PANEL_SERVICE" >/dev/null 2>&1
+           ok "TLS فعال شد" "TLS enabled"
+         fi ;;
+      6) local domain email; ask domain "دامنه" "Domain" ""
+         ask email "ایمیل" "Email" ""
+         if panel_cli cert acme --domain "$domain" --email "$email"; then
+           systemctl restart "$PANEL_SERVICE" >/dev/null 2>&1
+           ok "گواهی صادر شد" "Certificate issued"
+         fi ;;
+      7) panel_cli cert disable >/dev/null
+         systemctl restart "$PANEL_SERVICE" >/dev/null 2>&1
+         ok "TLS غیرفعال شد" "TLS disabled" ;;
+      8) local ips json
+         ask ips "IPها با کاما (خالی = بدون محدودیت)" "IPs comma separated (blank = no limit)" ""
+         json="$(printf '%s' "$ips" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+print(json.dumps([x.strip() for x in raw.split(",") if x.strip()]))')"
+         panel_cli settings set panel ip_allowlist "$json" >/dev/null
+         systemctl restart "$PANEL_SERVICE" >/dev/null 2>&1
+         ok "اعمال شد" "Applied" ;;
+      0) return ;;
+      *) err "گزینه نامعتبر" "Invalid option" ;;
+    esac
+    pause
+  done
+}
+
+menu_backup() {
+  while true; do
+    hr
+    say "بکاپ و بازیابی" "Backup and restore"
+    hr
+    panel_cli backup list
+    hr
+    echo "  1) $(L "ساخت بکاپ" "Create backup")"
+    echo "  2) $(L "ساخت بکاپ + ارسال تلگرام" "Create backup + send to Telegram")"
+    echo "  3) $(L "بازیابی" "Restore")"
+    echo "  0) $(L "بازگشت" "Back")"
+    local choice; read -r -p "> " choice
+    case "$choice" in
+      1) panel_cli backup create ;;
+      2) panel_cli backup create --telegram ;;
+      3) local name; ask name "نام فایل بکاپ" "Backup file name" ""
+         [[ -n "$name" ]] && panel_cli backup restore "$name" ;;
+      0) return ;;
+      *) err "گزینه نامعتبر" "Invalid option" ;;
+    esac
+    pause
+  done
+}
+
+# --------------------------------------------------------------------------
+# system tuning
+# --------------------------------------------------------------------------
+enable_bbr() {
+  need_root
+  if sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q bbr; then
+    ok "BBR از قبل فعال است" "BBR is already enabled"; return
+  fi
+  local conf=/etc/sysctl.d/99-sni-spoof.conf
+  cat > "$conf" <<'SYS'
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+net.ipv4.tcp_fastopen = 3
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+net.ipv4.tcp_rmem = 4096 87380 16777216
+net.ipv4.tcp_wmem = 4096 65536 16777216
+net.ipv4.tcp_mtu_probing = 1
+net.ipv4.ip_local_port_range = 10000 65000
+net.ipv4.tcp_max_syn_backlog = 8192
+net.core.somaxconn = 8192
+fs.file-max = 1000000
+SYS
+  sysctl --system >/dev/null 2>&1
+  if sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q bbr; then
+    ok "BBR و تنظیمات شبکه فعال شد" "BBR and network tuning enabled"
+  else
+    warn "کرنل شما BBR ندارد؛ بقیهٔ تنظیمات اعمال شد" \
+         "Your kernel has no BBR; the other tunables were applied"
+  fi
+}
+
+menu_system() {
+  while true; do
+    hr
+    say "ابزارهای سیستم" "System tools"
+    hr
+    echo "  1) $(L "فعال‌سازی BBR و بهینه‌سازی شبکه" "Enable BBR and network tuning")"
+    echo "  2) $(L "باز کردن پورت در فایروال" "Open a firewall port")"
+    echo "  3) $(L "بررسی IP خروجی" "Check egress IP")"
+    echo "  4) $(L "تست پورت‌های محلی" "Check local ports")"
+    echo "  5) $(L "نصب/بروزرسانی Xray" "Install / update Xray")"
+    echo "  6) $(L "اعمال کانفیگ Xray" "Apply Xray config")"
+    echo "  7) $(L "نصب/بروزرسانی هسته" "Install / update core")"
+    echo "  8) $(L "افزایش محدودیت فایل‌ها" "Raise file descriptor limits")"
+    echo "  0) $(L "بازگشت" "Back")"
+    local choice; read -r -p "> " choice
+    case "$choice" in
+      1) enable_bbr ;;
+      2) local port; ask port "پورت" "Port" ""; [[ -n "$port" ]] && { need_root; open_firewall "$port"; } ;;
+      3) panel_cli ip ;;
+      4) if command -v ss >/dev/null 2>&1; then ss -tlnp | head -30; else
+           grep -E ':[0-9A-F]{4} ' /proc/net/tcp | head -20; fi ;;
+      5) panel_cli xray install ;;
+      6) panel_cli xray apply ;;
+      7) panel_cli core install && svc restart "$CORE_SERVICE" && ok "انجام شد" "Done" ;;
+      8) need_root
+         if ! grep -q "sni-spoof" /etc/security/limits.conf 2>/dev/null; then
+           printf '# sni-spoof\n* soft nofile 1000000\n* hard nofile 1000000\n' >> /etc/security/limits.conf
+         fi
+         ok "اعمال شد (نیاز به لاگین مجدد)" "Applied (re-login required)" ;;
+      0) return ;;
+      *) err "گزینه نامعتبر" "Invalid option" ;;
+    esac
+    pause
+  done
+}
+
+toggle_lang() {
+  UI_LANG=$([[ "$UI_LANG" == "fa" ]] && echo en || echo fa)
+  mkdir -p "$ETC_DIR" 2>/dev/null || true
+  printf '%s' "$UI_LANG" > "$LANG_FILE" 2>/dev/null || true
+}
+
+# --------------------------------------------------------------------------
+# main menu
+# --------------------------------------------------------------------------
+banner() {
+  clear 2>/dev/null || true
+  printf '%s' "$BLU"
+  cat <<'ART'
+   ___ _  _ ___     ___ ___  ___   ___  ___
+  / __| \| |_ _|__ / __| _ \/ _ \ / _ \| __|
+  \__ \ .` || ||___\__ \  _/ (_) | (_) | _|
+  |___/_|\_|___|   |___/_|  \___/ \___/|_|
+ART
+  printf '%s' "$RST"
+  printf '  %s%s%s  %sv%s%s\n\n' "$DIM" "$(L "مدیریت SNI Spoof" "SNI Spoof manager")" "$RST" "$DIM" "$VERSION" "$RST"
+}
+
+main_menu() {
+  while true; do
+    banner
+    printf '  %-32s %s\n' "core"  "$(svc_state "$CORE_SERVICE")"
+    printf '  %-32s %s\n' "panel" "$(svc_state "$PANEL_SERVICE")"
+    printf '  %-32s %s\n' "xray"  "$(svc_state "$XRAY_SERVICE")"
+    hr
+    echo "   1) $(L "وضعیت کلی" "Overall status")"
+    echo "   2) $(L "لیسنرها" "Listeners")"
+    echo "   3) $(L "کانفیگ‌ها و لینک‌ها" "Configs and links")"
+    echo "   4) $(L "اسکنر SNI" "SNI scanner")"
+    echo "   5) $(L "سرویس‌ها" "Services")"
+    echo "   6) $(L "لاگ‌ها" "Logs")"
+    echo "   7) $(L "تنظیمات پنل" "Panel settings")"
+    echo "   8) $(L "بکاپ و بازیابی" "Backup and restore")"
+    echo "   9) $(L "ابزارهای سیستم" "System tools")"
+    echo "  10) $(L "بروزرسانی" "Update")"
+    echo "  11) $(L "نصب مجدد / نصب" "Install / reinstall")"
+    echo "  12) $(L "حذف کامل" "Uninstall")"
+    echo "  13) $(L "تغییر زبان (fa/en)" "Switch language (fa/en)")"
+    echo "   0) $(L "خروج" "Exit")"
+    hr
+    local choice; read -r -p "> " choice
+    case "$choice" in
+      1) show_status; pause ;;
+      2) menu_listeners ;;
+      3) menu_links ;;
+      4) menu_scan; pause ;;
+      5) menu_services ;;
+      6) menu_logs ;;
+      7) menu_panel ;;
+      8) menu_backup ;;
+      9) menu_system ;;
+      10) cmd_update; pause ;;
+      11) cmd_install; pause ;;
+      12) cmd_uninstall; pause ;;
+      13) toggle_lang ;;
+      0) exit 0 ;;
+      *) err "گزینه نامعتبر" "Invalid option"; sleep 1 ;;
+    esac
+  done
+}
+
+usage() {
+  cat <<USAGE
+sni-spoof $VERSION — $(L "مدیریت SNI Spoof" "SNI Spoof manager")
+
+  sni-spoof                 $(L "منوی تعاملی" "interactive menu")
+  sni-spoof install [PORT]  $(L "نصب" "install")
+  sni-spoof update          $(L "بروزرسانی پنل و هسته" "update panel and core")
+  sni-spoof uninstall       $(L "حذف کامل" "remove everything")
+  sni-spoof status          $(L "وضعیت" "status summary")
+  sni-spoof url             $(L "آدرس پنل" "panel URL")
+  sni-spoof start|stop|restart [core|panel|xray]
+  sni-spoof log [core|panel|xray]
+  sni-spoof scan            $(L "اسکن SNI" "run the SNI scanner")
+  sni-spoof bbr             $(L "فعال‌سازی BBR" "enable BBR")
+  sni-spoof backup          $(L "ساخت بکاپ" "create a backup")
+  sni-spoof cli ...         $(L "دسترسی مستقیم به CLI پنل" "raw panel CLI access")
+USAGE
+}
+
+case "${1:-}" in
+  ""|menu) main_menu ;;
+  install) shift; cmd_install "$@" ;;
+  update|upgrade) cmd_update ;;
+  uninstall|remove) cmd_uninstall ;;
+  status) show_status ;;
+  url) panel_cli url ;;
+  start|stop|restart)
+    need_root
+    case "${2:-core}" in
+      core) systemctl "$1" "$CORE_SERVICE" ;;
+      panel) systemctl "$1" "$PANEL_SERVICE" ;;
+      xray) systemctl "$1" "$XRAY_SERVICE" ;;
+      all) for u in "$CORE_SERVICE" "$PANEL_SERVICE" "$XRAY_SERVICE"; do systemctl "$1" "$u"; done ;;
+      *) err "سرویس نامعتبر" "Unknown service"; exit 1 ;;
+    esac
+    ok "انجام شد" "Done" ;;
+  log|logs)
+    case "${2:-core}" in
+      core) journalctl -u "$CORE_SERVICE" -n 200 -f --no-pager ;;
+      panel) journalctl -u "$PANEL_SERVICE" -n 200 -f --no-pager ;;
+      xray) journalctl -u "$XRAY_SERVICE" -n 200 -f --no-pager ;;
+    esac ;;
+  scan) shift; panel_cli scan "$@" ;;
+  bbr) enable_bbr ;;
+  backup) panel_cli backup create ;;
+  cli) shift; panel_cli "$@" ;;
+  -h|--help|help) usage ;;
+  -v|--version) printf '%s\n' "$VERSION" ;;
+  *) err "دستور ناشناخته: $1" "Unknown command: $1"; usage; exit 1 ;;
+esac

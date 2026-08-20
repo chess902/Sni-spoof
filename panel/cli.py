@@ -495,6 +495,32 @@ def cmd_qr(args):
     return 0
 
 
+def cmd_ip(args):
+    _bootstrap()
+    if args.local:
+        print(netutil.local_ip_for())
+        return 0
+    try:
+        if args.via == "http":
+            cfg = settings.get("xray")
+            host = "127.0.0.1" if cfg["listen"] in ("0.0.0.0", "::") else cfg["listen"]
+            result = netutil.public_ip(proxy="http://%s:%s" % (host, cfg["http_port"]))
+        elif args.via == "socks":
+            cfg = settings.get("xray")
+            host = "127.0.0.1" if cfg["listen"] in ("0.0.0.0", "::") else cfg["listen"]
+            result = netutil.public_ip_via_socks(
+                host, cfg["socks_port"],
+                username=cfg.get("auth_user", ""), password=cfg.get("auth_pass", ""),
+            )
+        else:
+            result = netutil.public_ip()
+    except Exception as exc:
+        print("failed: %s" % exc, file=sys.stderr)
+        return 1
+    _out(result, args.json)
+    return 0
+
+
 def cmd_subscription(args):
     _bootstrap()
     token = db.get_meta("sub_token", "")
@@ -617,6 +643,11 @@ def build_parser():
     qr = sub.add_parser("qr", help="render text as a QR code")
     qr.add_argument("text")
     qr.set_defaults(func=cmd_qr)
+
+    ip = sub.add_parser("ip", help="show the egress IP")
+    ip.add_argument("--via", choices=("direct", "http", "socks"), default="direct")
+    ip.add_argument("--local", action="store_true", help="print the LAN address instead")
+    ip.set_defaults(func=cmd_ip)
 
     subs = sub.add_parser("subscription", help="print the subscription URL")
     subs.add_argument("--host")
