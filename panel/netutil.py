@@ -237,6 +237,45 @@ def _recv_exact(sock, count):
     return buf
 
 
+def speaks_socks5(host, port, timeout=5):
+    """Confirm a SOCKS5 server answers on this port. Wiring an app to the HTTP
+    port instead shows up in the Xray log as
+    `malformed HTTP request "\x05\x01\x00"` — that byte string is a SOCKS5
+    greeting arriving at an HTTP inbound."""
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            sock.sendall(b"\x05\x01\x00")
+            reply = sock.recv(8)      # enough to recognise an HTTP status line
+    except OSError as exc:
+        return False, str(exc)
+    if len(reply) >= 1 and reply[0] == 0x05:
+        return True, "socks5"
+    if reply[:4] == b"HTTP":
+        return False, "an HTTP proxy is listening here, not SOCKS5"
+    return False, "unexpected reply %r" % reply
+
+
+def speaks_http_proxy(host, port, timeout=6):
+    """Confirm an HTTP proxy answers, using CONNECT to a well-known host."""
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            sock.sendall(
+                b"CONNECT api.ipify.org:443 HTTP/1.1\r\n"
+                b"Host: api.ipify.org:443\r\n\r\n"
+            )
+            reply = sock.recv(64)
+    except OSError as exc:
+        return False, str(exc)
+    if reply[:5] == b"HTTP/":
+        line = reply.split(b"\r\n", 1)[0].decode("ascii", "replace")
+        return line.split(" ")[1:2] == ["200"], line
+    if len(reply) >= 1 and reply[0] == 0x05:
+        return False, "a SOCKS5 server is listening here, not an HTTP proxy"
+    return False, "unexpected reply %r" % reply[:16]
+
+
 def public_ip_via_socks(proxy_host, proxy_port, timeout=12,
                         username="", password=""):
     """Ask an IP echo service for our egress address through a SOCKS5 proxy."""

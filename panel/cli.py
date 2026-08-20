@@ -225,8 +225,8 @@ def cmd_doctor(args):
         if upstream_ok and not netutil.is_cloudflare(item["connect_ip"]):
             check("  ↳ upstream is a Cloudflare edge", False,
                   "%s is outside Cloudflare's published ranges" % item["connect_ip"],
-                  "this technique fronts Cloudflare-hosted configs; a direct "
-                  "origin IP usually will not pass")
+                  "this technique only works against a Cloudflare edge — put "
+                  "your domain behind Cloudflare and re-import the config")
 
     xray_cfg = settings.get("xray")
     if xray_cfg.get("enabled"):
@@ -237,6 +237,32 @@ def cmd_doctor(args):
         xsvc = services.status("xray")
         check("xray service running", xsvc["active"], xsvc["state"],
               "sni-spoof cli xray apply")
+
+        host = xray_cfg["listen"]
+        if host in ("0.0.0.0", "::"):
+            host = "127.0.0.1"
+        http_port, socks_port = xray_cfg["http_port"], xray_cfg["socks_port"]
+        if xsvc["active"]:
+            ok_socks, detail = netutil.speaks_socks5(host, socks_port)
+            check("SOCKS5 proxy on :%s" % socks_port, ok_socks, detail,
+                  "point SOCKS clients at %s:%s (NOT the HTTP port)" % (host, socks_port))
+            ok_http, detail = netutil.speaks_http_proxy(host, http_port)
+            check("HTTP proxy on :%s" % http_port, ok_http, detail,
+                  "point HTTP clients at %s:%s" % (host, http_port))
+            if enabled:
+                try:
+                    egress = netutil.public_ip_via_socks(
+                        host, socks_port, timeout=12,
+                        username=xray_cfg.get("auth_user", ""),
+                        password=xray_cfg.get("auth_pass", ""),
+                    )
+                    check("tunnel egress IP", bool(egress.get("ip")),
+                          "%s (must be your FOREIGN server, not this one)" % egress.get("ip"))
+                except Exception as exc:
+                    check("tunnel egress IP", False, str(exc)[:110],
+                          "the tunnel is not carrying traffic — fix the listener first")
+        else:
+            check("proxy ports", True, "skipped — xray is not running", skipped=True)
 
     panel_cfg = settings.get("panel")
     check("panel port free or ours", True, "port %s" % panel_cfg["port"])

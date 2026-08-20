@@ -17,6 +17,14 @@ ASSETS = {
 }
 ASSET_DIR = os.path.join(paths.DATA, "xray-assets")
 
+# RFC1918 + loopback + link-local + CGNAT, i.e. everything that must never be
+# sent through the tunnel.
+PRIVATE_NETS = [
+    "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
+    "172.16.0.0/12", "192.168.0.0/16", "224.0.0.0/4", "240.0.0.0/4",
+    "::1/128", "fc00::/7", "fe80::/10",
+]
+
 
 def is_installed():
     return download.executable(paths.XRAY_BIN)
@@ -214,7 +222,9 @@ def build_config(link_raw, dial_host="127.0.0.1", dial_port=40443):
         ],
         "routing": {
             "domainStrategy": "AsIs",
-            "rules": [{"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"}],
+            # Explicit CIDRs rather than `geoip:private`, so the config never
+            # depends on geoip.dat being present next to the binary.
+            "rules": [{"type": "field", "ip": PRIVATE_NETS, "outboundTag": "direct"}],
         },
     }
     return config

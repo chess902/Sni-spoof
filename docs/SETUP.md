@@ -83,6 +83,8 @@ real cause**; the rest are consequences.
 | `upstream is a Cloudflare edge: FAIL` | Your domain is not behind Cloudflare |
 | `listener … TCP ok but TLS failed` | The fake SNI is burned — `sni-spoof cli scan --apply` |
 | `core service running: FAIL` | `sni-spoof log core` for the real error |
+| `connect failed: connect timeout upstream=…` | The upstream IP is blocked at the network layer. This technique only reshapes what DPI *sees* after the TCP handshake — it cannot reach an IP that is null-routed. Use a Cloudflare edge. |
+| `tunnel egress IP: FAIL` | The tunnel is not carrying traffic yet — do not wire 3x-ui to it until this is green. |
 
 ### 6. Point clients at it
 
@@ -201,6 +203,16 @@ Then add a routing rule so traffic actually uses it — in `routing.rules`,
 
 Notes:
 
+* **Port 1080 is HTTP, port 1081 is SOCKS5.** Pointing a SOCKS client at 1080
+  produces this in the Xray log — it is the SOCKS5 greeting arriving at an HTTP
+  inbound:
+
+  ```
+  proxy/http: failed to read http request > malformed HTTP request "\x05\x01\x00"
+  ```
+
+  `sni-spoof doctor` verifies both ports and tells you which protocol answers
+  where.
 * SOCKS5 carries UDP only when `socks_udp` is enabled on both sides. Leave it
   off unless something needs it.
 * Do not route the sni-spoof listener's own traffic back into the SOCKS
@@ -288,6 +300,8 @@ sni-spoof doctor
 | `upstream is a Cloudflare edge: FAIL` | دامنه‌تان پشت کلادفلر نیست |
 | `listener … TCP ok but TLS failed` | SNI جعلی سوخته — `sni-spoof cli scan --apply` |
 | `core service running: FAIL` | برای خطای واقعی: `sni-spoof log core` |
+| `connect failed: connect timeout upstream=…` | خودِ IP مقصد در لایهٔ شبکه بسته است. این تکنیک فقط چیزی را که DPI *بعد از* هندشیک TCP می‌بیند تغییر می‌دهد؛ به IP مسدود اصلاً نمی‌رسد. از edge کلادفلر استفاده کنید. |
+| `tunnel egress IP: FAIL` | تونل هنوز ترافیک را حمل نمی‌کند — تا سبز نشده، 3x-ui را به آن وصل نکنید. |
 
 ### ۶. کلاینت‌ها را به آن وصل کنید
 
@@ -406,6 +420,16 @@ sni-spoof cli ip --via socks                        # باید IP خارجی ر�
 
 نکته‌ها:
 
+* **پورت 1080 برای HTTP است و 1081 برای SOCKS5.** اگر کلاینت SOCKS را روی 1080
+  بگذارید، در لاگ Xray این را می‌بینید — همان greeting پروتکل SOCKS5 که به
+  اینباند HTTP رسیده است:
+
+  ```
+  proxy/http: failed to read http request > malformed HTTP request "\x05\x01\x00"
+  ```
+
+  دستور `sni-spoof doctor` هر دو پورت را بررسی می‌کند و می‌گوید کدام پروتکل
+  روی کدام پورت جواب می‌دهد.
 * SOCKS5 فقط وقتی UDP را حمل می‌کند که `socks_udp` در هر دو طرف روشن باشد.
   اگر لازم ندارید خاموش بگذارید.
 * ترافیک خودِ لیسنر sni-spoof را به اوت‌باند SOCKS برنگردانید — حلقه می‌شود.
