@@ -24,6 +24,7 @@ DEFAULTS = {
         "idle_timeout": None,
         "graceful_shutdown_sec": 0,
         "log_level": "warn",
+        "auto_refresh_ip_hours": 0,
         "release_repo": "therealaleph/sni-spoofing-rust",
     },
     "xray": {

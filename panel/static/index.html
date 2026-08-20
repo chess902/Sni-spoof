@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>SNI Spoof Panel</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%2338bdf8'/><text x='16' y='23' font-size='18' text-anchor='middle' fill='%23041220' font-family='monospace'>S</text></svg>">
+</head>
+<body>
+
+<div id="login" class="login-wrap">
+  <form class="login-card" id="login-form" autocomplete="on">
+    <h1 data-i18n="login.title">ورود به پنل</h1>
+    <div class="sub" data-i18n="login.sub">مدیریت SNI Spoof</div>
+    <div class="field">
+      <label for="lg-user" data-i18n="login.username">نام کاربری</label>
+      <input id="lg-user" name="username" autocomplete="username" required>
+    </div>
+    <div class="field">
+      <label for="lg-pass" data-i18n="login.password">رمز عبور</label>
+      <input id="lg-pass" name="password" type="password" autocomplete="current-password" required>
+    </div>
+    <div class="field" id="lg-totp-field" style="display:none">
+      <label for="lg-totp" data-i18n="login.totp">کد دو مرحله‌ای</label>
+      <input id="lg-totp" name="totp" inputmode="numeric" autocomplete="one-time-code" placeholder="000000">
+    </div>
+    <button class="btn-primary btn-block" type="submit" data-i18n="login.submit">ورود</button>
+    <div style="margin-top:14px;text-align:center">
+      <button type="button" class="btn-sm" id="lg-lang">EN / فا</button>
+    </div>
+  </form>
+</div>
+
+<div id="app" class="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="logo">S</div>
+      <div>
+        <b>SNI Spoof</b>
+        <small id="brand-version">panel</small>
+      </div>
+    </div>
+    <div class="nav-item active" data-page="dashboard"><span class="ic">◈</span><span data-i18n="nav.dashboard">داشبورد</span></div>
+    <div class="nav-item" data-page="listeners"><span class="ic">⇄</span><span data-i18n="nav.listeners">لیسنرها</span></div>
+    <div class="nav-item" data-page="links"><span class="ic">🔗</span><span data-i18n="nav.links">کانفیگ‌ها</span></div>
+    <div class="nav-item" data-page="xray"><span class="ic">⚡</span><span data-i18n="nav.xray">Xray</span></div>
+    <div class="nav-item" data-page="scanner"><span class="ic">◎</span><span data-i18n="nav.scanner">اسکنر SNI</span></div>
+    <div class="nav-item" data-page="logs"><span class="ic">▤</span><span data-i18n="nav.logs">لاگ‌ها</span></div>
+    <div class="nav-item" data-page="backup"><span class="ic">⇩</span><span data-i18n="nav.backup">بکاپ</span></div>
+    <div class="nav-item" data-page="settings"><span class="ic">⚙</span><span data-i18n="nav.settings">تنظیمات</span></div>
+    <div class="nav-item" data-page="users"><span class="ic">◐</span><span data-i18n="nav.users">کاربران</span></div>
+    <div class="nav-spacer"></div>
+    <div class="nav-item" id="nav-lang"><span class="ic">🌐</span><span data-i18n="nav.language">زبان</span></div>
+    <div class="nav-item" id="nav-theme"><span class="ic">◑</span><span data-i18n="nav.theme">تم</span></div>
+    <div class="nav-item" id="nav-logout"><span class="ic">⏻</span><span data-i18n="nav.logout">خروج</span></div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <button class="mobile-toggle btn-sm" id="menu-toggle">☰</button>
+      <h2 id="page-title" data-i18n="nav.dashboard">داشبورد</h2>
+      <div class="tools" id="page-tools"></div>
+    </div>
+    <div id="page"></div>
+  </main>
+</div>
+
+<div id="modal-root"></div>
+<div id="toasts"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
