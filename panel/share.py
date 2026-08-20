@@ -165,21 +165,68 @@ def rewrite(link, new_host, new_port, new_name=None):
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, fragment))
 
 
-def to_listener_payload(item, listen_host="0.0.0.0", listen_port=40443, fake_sni=None):
-    """Turn a parsed link into the listener payload that fronts it."""
+def choose_upstream(item, resolver=None):
+    """Pick the host the listener should dial, and say why.
+
+    Panels such as 3x-ui hand out links whose address is the *origin* IP, with
+    the Cloudflare-proxied domain only present in `sni=` / `host=`. Dialing that
+    origin bypasses Cloudflare entirely, which defeats the whole technique: the
+    decoy SNI has nothing to hide behind and DPI simply resets the real
+    ClientHello. So when the link's address is not a Cloudflare edge but the
+    config carries a domain that is, prefer the domain.
+
+    Returns (host, port, ip, note).
+    """
     from . import netutil
 
-    upstream_ip, _ = netutil.pick_upstream_ip(item["upstream_host"], item["upstream_port"])
+    resolve = resolver or netutil.pick_upstream_ip
+    port = int(item["upstream_port"])
+    primary = item["upstream_host"]
+
+    primary_ip, primary_error = None, None
+    try:
+        primary_ip, _ = resolve(primary, port)
+        if netutil.is_cloudflare(primary_ip):
+            return primary, port, primary_ip, ""
+    except ValueError as exc:
+        primary_error = str(exc)
+
+    for domain in (item.get("sni"), item.get("http_host")):
+        if not domain or domain == primary or netutil.is_ip(domain):
+            continue
+        try:
+            ip, _ = resolve(domain, port)
+        except ValueError:
+            continue
+        if netutil.is_cloudflare(ip):
+            return domain, port, ip, (
+                "the link address %s is not a Cloudflare edge; using %s from the "
+                "config's sni/host instead, which resolves to the Cloudflare edge %s"
+                % (primary, domain, ip)
+            )
+
+    if primary_ip is None:
+        raise ValueError(primary_error or "could not resolve %s" % primary)
+    return primary, port, primary_ip, ""
+
+
+def to_listener_payload(item, listen_host="0.0.0.0", listen_port=40443, fake_sni=None,
+                        resolver=None):
+    """Turn a parsed link into the listener payload that fronts it."""
+    host, port, upstream_ip, note = choose_upstream(item, resolver)
+    remark = "imported from %s link" % item["protocol"]
+    if note:
+        remark = "%s — %s" % (remark, note)
     return {
         "name": item["label"][:80],
         "enabled": True,
         "listen_host": listen_host,
         "listen_port": int(listen_port),
-        "connect_host": item["upstream_host"],
+        "connect_host": host,
         "connect_ip": upstream_ip,
-        "connect_port": int(item["upstream_port"]),
+        "connect_port": port,
         "fake_sni": fake_sni or "security.vercel.com",
-        "remark": "imported from %s link" % item["protocol"],
+        "remark": remark[:500],
     }
 
 

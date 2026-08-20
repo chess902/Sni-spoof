@@ -86,6 +86,69 @@ class ShareLinkTests(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+class UpstreamSelectionTests(unittest.TestCase):
+    """Panels like 3x-ui emit links whose address is the origin IP; the
+    Cloudflare domain only shows up in sni=/host=. Dialing the origin bypasses
+    Cloudflare and the technique cannot work."""
+
+    CF = "104.18.4.130"
+
+    def _resolver(self, table):
+        def resolve(host, port):
+            if host not in table:
+                raise ValueError("no DNS for %s" % host)
+            return table[host], [table[host]]
+        return resolve
+
+    def test_prefers_cloudflare_domain_over_origin_ip(self):
+        link = ("vless://u@144.91.68.34:443?security=tls&sni=cdn.example.com"
+                "&type=ws&host=cdn.example.com#node")
+        host, port, ip, note = share.choose_upstream(
+            share.parse(link),
+            self._resolver({"144.91.68.34": "144.91.68.34", "cdn.example.com": self.CF}),
+        )
+        self.assertEqual(host, "cdn.example.com")
+        self.assertEqual(ip, self.CF)
+        self.assertIn("not a Cloudflare edge", note)
+
+    def test_keeps_address_when_it_is_already_cloudflare(self):
+        link = "vless://u@cdn.example.com:443?security=tls&sni=cdn.example.com&type=ws#n"
+        host, _, ip, note = share.choose_upstream(
+            share.parse(link), self._resolver({"cdn.example.com": self.CF})
+        )
+        self.assertEqual(host, "cdn.example.com")
+        self.assertEqual(ip, self.CF)
+        self.assertEqual(note, "")
+
+    def test_keeps_origin_when_no_cloudflare_alternative_exists(self):
+        link = ("vless://u@144.91.68.34:443?security=tls&sni=plain.example.com"
+                "&type=ws#n")
+        host, _, ip, note = share.choose_upstream(
+            share.parse(link),
+            self._resolver({"144.91.68.34": "144.91.68.34",
+                            "plain.example.com": "203.0.113.9"}),
+        )
+        self.assertEqual(host, "144.91.68.34")
+        self.assertEqual(note, "")
+
+    def test_payload_records_why_the_upstream_changed(self):
+        link = ("vless://u@144.91.68.34:443?security=tls&sni=cdn.example.com"
+                "&type=ws&host=cdn.example.com#node")
+        payload = share.to_listener_payload(
+            share.parse(link), "0.0.0.0", 40443, "security.vercel.com",
+            resolver=self._resolver({"144.91.68.34": "144.91.68.34",
+                                     "cdn.example.com": self.CF}),
+        )
+        self.assertEqual(payload["connect_host"], "cdn.example.com")
+        self.assertEqual(payload["connect_ip"], self.CF)
+        self.assertIn("Cloudflare", payload["remark"])
+
+    def test_unresolvable_link_raises(self):
+        link = "vless://u@nope.invalid:443?security=tls&type=ws#n"
+        with self.assertRaises(ValueError):
+            share.choose_upstream(share.parse(link), self._resolver({}))
+
+
 class ListenerValidationTests(unittest.TestCase):
     def setUp(self):
         db.execute("DELETE FROM listeners")

@@ -328,7 +328,10 @@ def cmd_report(args):
             item["connect_ip"], item["connect_port"]))
         line("      fake_sni     : %s" % item["fake_sni"])
         line("      upstream host: %s" % (item["connect_host"] or "(none — IP was set directly)"))
-        line("      cloudflare   : %s" % netutil.is_cloudflare(item["connect_ip"]))
+        line("      cloudflare   : %s%s" % (
+            netutil.is_cloudflare(item["connect_ip"]),
+            "" if netutil.is_cloudflare(item["connect_ip"])
+            else "   <-- NOT a Cloudflare edge"))
         line("      self/local   : %s" % netutil.is_local_address(item["connect_ip"]))
 
         if item["connect_host"]:
@@ -470,6 +473,30 @@ def cmd_listener(args):
         }
         try:
             item = core.create_listener(payload)
+        except core.ValidationError as exc:
+            print("error: %s" % exc, file=sys.stderr)
+            return 1
+        core.apply(restart=True)
+        _out(item, args.json)
+    elif args.action == "set":
+        if not args.id:
+            print("--id is required", file=sys.stderr)
+            return 1
+        payload = {}
+        if args.connect_host:
+            payload["connect_host"] = args.connect_host
+        if args.connect_ip:
+            payload["connect_ip"] = args.connect_ip
+        if args.fake_sni:
+            payload["fake_sni"] = args.fake_sni
+        if args.name:
+            payload["name"] = args.name
+        if not payload:
+            print("nothing to change (use --connect-host / --fake-sni / --name)",
+                  file=sys.stderr)
+            return 1
+        try:
+            item = core.update_listener(args.id, payload)
         except core.ValidationError as exc:
             print("error: %s" % exc, file=sys.stderr)
             return 1
@@ -804,7 +831,8 @@ def build_parser():
 
     listener = sub.add_parser("listener", help="manage listeners")
     listener.add_argument(
-        "action", choices=("list", "add", "delete", "toggle", "apply", "test", "refresh")
+        "action",
+        choices=("list", "add", "set", "delete", "toggle", "apply", "test", "refresh"),
     )
     listener.add_argument("--id", type=int)
     listener.add_argument("--name")
