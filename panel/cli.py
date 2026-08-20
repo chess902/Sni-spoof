@@ -384,6 +384,34 @@ def cmd_report(args):
     return 0
 
 
+def cmd_ports(args):
+    """Show what is listening where — untangles a proxy chain quickly."""
+    _bootstrap()
+    rows = stats.listening_ports()
+    if args.port:
+        rows = [r for r in rows if r["port"] == args.port]
+    if args.json:
+        _out(rows, True)
+        return 0
+    if not rows:
+        print("no listening TCP sockets matched")
+        return 1
+    known = {
+        settings.get("panel", "port"): "sni-spoof panel",
+        settings.get("xray", "http_port"): "sni-spoof xray HTTP proxy",
+        settings.get("xray", "socks_port"): "sni-spoof xray SOCKS5 proxy",
+    }
+    for item in core.list_listeners():
+        known[item["listen_port"]] = "sni-spoof listener #%d" % item["id"]
+
+    print("%-7s %-24s %-8s %-18s %s" % ("PORT", "ADDRESS", "PID", "PROCESS", "KNOWN AS"))
+    for row in rows:
+        print("%-7d %-24s %-8s %-18s %s" % (
+            row["port"], row["address"] or "-", row["pid"] or "-",
+            row["process"], known.get(row["port"], "")))
+    return 0
+
+
 def cmd_url(args):
     _bootstrap()
     print(settings.panel_url(netutil.local_ip_for()))
@@ -815,6 +843,9 @@ def build_parser():
     sub.add_parser("report", help="print a pasteable diagnostic bundle").set_defaults(
         func=cmd_report
     )
+    ports = sub.add_parser("ports", help="show which process owns each listening port")
+    ports.add_argument("--port", type=int, help="only this port")
+    ports.set_defaults(func=cmd_ports)
 
     user = sub.add_parser("user", help="manage panel users")
     user.add_argument("action", choices=("list", "add", "passwd", "delete"))

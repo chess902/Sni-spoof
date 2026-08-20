@@ -711,6 +711,7 @@ sni-spoof $VERSION — $(L "مدیریت SNI Spoof" "SNI Spoof manager")
   sni-spoof status          $(L "وضعیت" "status summary")
   sni-spoof doctor          $(L "عیب‌یابی خودکار" "diagnose what is broken")
   sni-spoof report          $(L "گزارش کامل برای اشتراک‌گذاری" "full diagnostic bundle")
+  sni-spoof ports [--port N] $(L "چه پروسه‌ای روی چه پورتی گوش می‌دهد" "who owns each listening port")
   sni-spoof url             $(L "آدرس پنل" "panel URL")
   sni-spoof start|stop|restart [core|panel|xray]
   sni-spoof log [core|panel|xray]
@@ -732,6 +733,7 @@ case "${1:-}" in
   status) show_status ;;
   doctor|diagnose) panel_cli doctor ;;
   report) panel_cli report ;;
+  ports) shift; panel_cli ports "$@" ;;
   url) panel_cli url ;;
   start|stop|restart)
     need_root

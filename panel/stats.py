@@ -172,6 +172,63 @@ def connections_by_port(ports):
     return result
 
 
+def listening_ports():
+    """Every listening TCP socket with its owning process, parsed from /proc.
+
+    `ss`/`netstat` are not installed on every minimal image, and knowing which
+    process owns a port is usually the fastest way to untangle a proxy chain.
+    """
+    sockets = {}
+    for path in ("/proc/net/tcp", "/proc/net/tcp6"):
+        for line in _read(path).splitlines()[1:]:
+            fields = line.split()
+            if len(fields) < 10 or fields[3] != TCP_LISTEN:
+                continue
+            local = fields[1]
+            try:
+                port = int(local.rsplit(":", 1)[1], 16)
+                inode = int(fields[9])
+            except (IndexError, ValueError):
+                continue
+            addr = _hex_to_ip(local.rsplit(":", 1)[0])
+            sockets.setdefault(inode, {"port": port, "address": addr})
+
+    owners = {}
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        fd_dir = "/proc/%s/fd" % pid
+        try:
+            names = os.listdir(fd_dir)
+        except OSError:
+            continue
+        for name in names:
+            try:
+                target = os.readlink(os.path.join(fd_dir, name))
+            except OSError:
+                continue
+            if not target.startswith("socket:["):
+                continue
+            try:
+                inode = int(target[8:-1])
+            except ValueError:
+                continue
+            if inode in sockets:
+                owners[inode] = int(pid)
+
+    out = []
+    for inode, info in sockets.items():
+        pid = owners.get(inode, 0)
+        name = ""
+        if pid:
+            name = _read("/proc/%d/comm" % pid).strip()
+        out.append({
+            "port": info["port"], "address": info["address"],
+            "pid": pid, "process": name or "?",
+        })
+    return sorted(out, key=lambda item: item["port"])
+
+
 def process_info(pid):
     if not pid or not os.path.isdir("/proc/%d" % pid):
         return {}
