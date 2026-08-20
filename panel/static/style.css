@@ -242,6 +242,18 @@ canvas { width: 100%; height: 190px; display: block; }
 .kv b { color: var(--muted); font-weight: 500; }
 .ltr { direction: ltr; text-align: left; }
 
+/* Composed values like "7.7 GB / 252 GB" or "1.2.3.4:443" must stay LTR even
+   inside the RTL layout, otherwise bidi reordering scrambles them. */
+html[dir="rtl"] .stat .value,
+html[dir="rtl"] .stat .hint,
+html[dir="rtl"] .kv span,
+html[dir="rtl"] .card h3 .right,
+html[dir="rtl"] .num {
+  direction: ltr;
+  unicode-bidi: isolate;
+  text-align: right;
+}
+
 .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
 .tab {
   padding: 7px 14px; border-radius: 999px; cursor: pointer;

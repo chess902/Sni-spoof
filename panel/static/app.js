@@ -325,6 +325,7 @@ function chart(canvas, series, labels) {
   max = max * 1.15;
 
   ctx.strokeStyle = grid; ctx.lineWidth = 1; ctx.font = "10px sans-serif"; ctx.fillStyle = muted;
+  ctx.direction = "ltr";   // axis labels are numbers; never mirror them
   for (var g = 0; g <= 4; g++) {
     var y = 12 + (height - 30) * g / 4;
     ctx.beginPath(); ctx.moveTo(38, y); ctx.lineTo(width - 6, y); ctx.stroke();
@@ -394,7 +395,7 @@ pages.dashboard = function (root) {
       node.innerHTML = "<table><tbody>" + res.events.map(function (e) {
         return "<tr><td style='white-space:nowrap'>" + esc(stamp(e.ts)) + "</td><td>" +
           '<span class="badge ' + (e.level === "error" ? "err" : e.level === "warn" ? "warn" : "") + '">' +
-          esc(e.category) + "</span></td><td>" + esc(e.message) + "</td></tr>";
+          esc(e.category) + '</span></td><td dir="auto">' + esc(e.message) + "</td></tr>";
       }).join("") + "</tbody></table>";
     }).catch(function () {});
   }

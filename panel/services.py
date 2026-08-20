@@ -1,6 +1,7 @@
 """systemd helpers. Everything degrades to a clear error instead of raising
 when systemd is unavailable (containers, unit tests)."""
 
+import os
 import shutil
 import subprocess
 
@@ -14,7 +15,10 @@ MANAGED = {
 
 
 def has_systemd():
-    return shutil.which("systemctl") is not None
+    """True only when systemd is really PID 1. `systemctl` is often present in
+    containers where it cannot talk to any bus, and acting on that leads to a
+    watchdog that restarts nothing in a loop."""
+    return os.path.isdir("/run/systemd/system") and shutil.which("systemctl") is not None
 
 
 def _run(args, timeout=25):
