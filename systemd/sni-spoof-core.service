@@ -3,6 +3,10 @@ Description=sni-spoof core (DPI bypass TCP forwarder)
 Documentation=https://github.com/chess902/Sni-spoof
 After=network-online.target
 Wants=network-online.target
+# The core exits non-zero with no listeners; without this gate Restart=always
+# turns "not configured yet" into a crash loop. The panel manages the flag.
+ConditionPathExists=/etc/sni-spoof/core.enabled
+ConditionPathExists=/etc/sni-spoof/core.json
 
 [Service]
 Type=simple

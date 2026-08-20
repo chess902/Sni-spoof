@@ -241,7 +241,7 @@ def build_config():
 
 
 def write_config():
-    """Render config.json. Returns (path, listener_count)."""
+    """Render config.json and the readiness flag. Returns (path, count)."""
     config = build_config()
     paths.ensure_dirs()
     tmp = paths.CORE_CONFIG + ".tmp"
@@ -249,7 +249,22 @@ def write_config():
         json.dump(config, handle, indent=2, ensure_ascii=False)
         handle.write("\n")
     os.replace(tmp, paths.CORE_CONFIG)
+    _set_ready_flag(bool(config["listeners"]))
     return paths.CORE_CONFIG, len(config["listeners"])
+
+
+def _set_ready_flag(ready):
+    """The core exits non-zero when it has no listeners, and `Restart=always`
+    would turn that into a crash loop. The unit is gated on this flag so
+    systemd cleanly skips the service instead."""
+    try:
+        if ready:
+            with open(paths.CORE_READY, "w", encoding="utf-8") as handle:
+                handle.write("listeners configured\n")
+        elif os.path.exists(paths.CORE_READY):
+            os.unlink(paths.CORE_READY)
+    except OSError:
+        pass
 
 
 def apply(restart=True):

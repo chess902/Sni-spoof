@@ -11,6 +11,7 @@ RUN = os.environ.get("SNI_SPOOF_RUN", "/run/sni-spoof")
 
 DB_FILE = os.path.join(DATA, "panel.db")
 CORE_CONFIG = os.path.join(ETC, "core.json")
+CORE_READY = os.path.join(ETC, "core.enabled")
 XRAY_CONFIG = os.path.join(ETC, "xray.json")
 CERT_DIR = os.path.join(DATA, "certs")
 BACKUP_DIR = os.path.join(DATA, "backups")

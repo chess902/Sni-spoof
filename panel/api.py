@@ -234,6 +234,22 @@ def service_action(request):
         raise ApiError("unknown service", 404)
     if alias == "panel" and verb in ("stop", "disable"):
         raise ApiError("stopping the panel from the panel is not allowed", 400)
+
+    if alias == "xray" and verb in ("start", "restart", "enable"):
+        if not xray.is_installed():
+            raise ApiError(i18n.t("xray_missing", _lang(request)), 400, "xray_missing")
+        try:
+            xray.write_config()          # Xray refuses to start without one
+        except ValueError as exc:
+            raise ApiError(str(exc), 400) from None
+    if alias == "core" and verb in ("start", "restart", "enable"):
+        _, count = core.write_config()
+        if count == 0:
+            raise ApiError(
+                "the core has no enabled listeners to serve; add one first", 400,
+                "no_listeners",
+            )
+
     ok, message = services.action(alias, verb)
     db.log_event("service %s %s -> %s" % (alias, verb, "ok" if ok else message),
                  level="info" if ok else "warn", category="service")

@@ -87,6 +87,11 @@ def start(alias):
         return False, "%s is not supervised here" % alias
     if not os.path.exists(command[0]):
         return False, "%s is not installed" % os.path.basename(command[0])
+    config = command[-1]
+    if not os.path.exists(config):
+        return False, "%s has no config yet (%s)" % (alias, config)
+    if alias == "core" and not os.path.exists(paths.CORE_READY):
+        return False, "the core has no enabled listeners to serve"
     if status(alias)["active"]:
         return True, "already running"
 

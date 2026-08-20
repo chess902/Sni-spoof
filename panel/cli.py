@@ -161,6 +161,87 @@ def cmd_status(args):
     return 0
 
 
+def cmd_doctor(args):
+    """Explain, in order, why the stack is not serving traffic."""
+    _bootstrap()
+    checks = []
+
+    def check(name, ok, detail="", fix=""):
+        checks.append({"check": name, "ok": bool(ok), "detail": detail, "fix": fix})
+
+    check("core binary installed", core.is_installed(),
+          paths.CORE_BIN if core.is_installed() else "missing",
+          "sni-spoof cli core install")
+
+    listeners = core.list_listeners()
+    enabled = [l for l in listeners if l["enabled"]]
+    check("listeners configured", bool(enabled),
+          "%d total, %d enabled" % (len(listeners), len(enabled)),
+          "sni-spoof cli link import 'vless://…'  (or the Configs page)")
+
+    config_exists = os.path.exists(paths.CORE_CONFIG)
+    check("core config written", config_exists, paths.CORE_CONFIG,
+          "sni-spoof cli core apply")
+    check("core marked ready", os.path.exists(paths.CORE_READY),
+          "flag gating the systemd unit", "sni-spoof cli core apply")
+
+    svc = services.status("core")
+    check("core service running", svc["active"],
+          "%s/%s" % (svc["state"], svc["sub"] or "-"),
+          "sni-spoof cli service core restart  ·  sni-spoof log core")
+
+    for item in enabled:
+        result = tasks.health_check(item, timeout=6)
+        label = "listener #%d :%d" % (item["id"], item["listen_port"])
+        if not result["tcp_ok"]:
+            check(label, False, result["error"], "check the core log")
+        elif result["tls_ok"] is False:
+            check(label, False, "TCP ok but TLS failed: %s" % result["error"],
+                  "the fake SNI is probably burned — run: sni-spoof cli scan --apply")
+        else:
+            check(label, True, "tcp %sms tls %sms" % (result["tcp_ms"], result["tls_ms"]))
+        upstream_ok, upstream_ms, upstream_err = netutil.tcp_probe(
+            item["connect_ip"], item["connect_port"], 6
+        )
+        check("  ↳ upstream %s:%d" % (item["connect_ip"], item["connect_port"]),
+              upstream_ok, upstream_err or "%sms" % upstream_ms,
+              "sni-spoof cli listener refresh")
+
+    xray_cfg = settings.get("xray")
+    if xray_cfg.get("enabled"):
+        check("xray installed", xray.is_installed(), xray.installed_version() or "missing",
+              "sni-spoof cli xray install")
+        check("xray config written", os.path.exists(paths.XRAY_CONFIG), paths.XRAY_CONFIG,
+              "sni-spoof cli xray apply")
+        xsvc = services.status("xray")
+        check("xray service running", xsvc["active"], xsvc["state"],
+              "sni-spoof cli xray apply")
+
+    panel_cfg = settings.get("panel")
+    check("panel port free or ours", True, "port %s" % panel_cfg["port"])
+
+    if args.json:
+        _out(checks, True)
+        return 0 if all(c["ok"] for c in checks) else 1
+
+    print("sni-spoof doctor")
+    print()
+    failed = 0
+    for item in checks:
+        mark = "\033[32mOK  \033[0m" if item["ok"] else "\033[31mFAIL\033[0m"
+        print("  [%s] %-34s %s" % (mark, item["check"], item["detail"]))
+        if not item["ok"]:
+            failed += 1
+            if item["fix"]:
+                print("         \033[33m↳ %s\033[0m" % item["fix"])
+    print()
+    if failed:
+        print("%d check(s) failed — the first FAIL above is usually the real cause." % failed)
+    else:
+        print("Everything checks out.")
+    return 0 if not failed else 1
+
+
 def cmd_url(args):
     _bootstrap()
     print(settings.panel_url(netutil.local_ip_for()))
@@ -562,6 +643,9 @@ def build_parser():
 
     sub.add_parser("status", help="show a summary").set_defaults(func=cmd_status)
     sub.add_parser("url", help="print the panel URL").set_defaults(func=cmd_url)
+    sub.add_parser("doctor", help="diagnose why traffic is not flowing").set_defaults(
+        func=cmd_doctor
+    )
 
     user = sub.add_parser("user", help="manage panel users")
     user.add_argument("action", choices=("list", "add", "passwd", "delete"))
